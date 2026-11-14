@@ -1,0 +1,7 @@
+{
+  "name": "Rodokmen & Matriky Online",
+  "description": "Interaktivní tvorba rodokmenu s vyhledáváním v českých online matrikách, automatickým doplňováním dat pomocí AI, GEDCOM exportem a rodinným sdílením.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
