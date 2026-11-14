@@ -67,6 +67,78 @@ export const ParishAssistantModal: React.FC<ParishAssistantModalProps> = ({
   const [isAdvising, setIsAdvising] = useState(false);
   const [advisorAdvice, setAdvisorAdvice] = useState<string | null>(null);
 
+  const renderInlineMarkdown = (text: string): React.ReactNode[] => {
+    // Parse [label](https://...) and **bold** inline segments safely
+    const tokenRegex = /(\[[^\]]+\]\(https?:\/\/[^)\s]+\)|\*\*[^*]+\*\*)/g;
+    const parts = text.split(tokenRegex);
+    return parts.map((part, idx) => {
+      const linkMatch = part.match(/^\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)$/);
+      if (linkMatch) {
+        return (
+          <a
+            key={idx}
+            href={linkMatch[2]}
+            target="_blank"
+            rel="noreferrer"
+            className="text-emerald-800 hover:text-emerald-950 underline decoration-emerald-400 underline-offset-2 font-semibold inline-flex items-center gap-0.5"
+          >
+            <span>{linkMatch[1]}</span>
+            <ExternalLink className="w-2.5 h-2.5 inline shrink-0" />
+          </a>
+        );
+      }
+      const boldMatch = part.match(/^\*\*([^*]+)\*\*$/);
+      if (boldMatch) {
+        return (
+          <strong key={idx} className="font-semibold text-stone-900">
+            {boldMatch[1]}
+          </strong>
+        );
+      }
+      return <React.Fragment key={idx}>{part}</React.Fragment>;
+    });
+  };
+
+  const renderMarkdownContent = (content: string) => {
+    const lines = content.split('\n');
+    return (
+      <div className="space-y-1.5 text-xs text-stone-800 leading-relaxed font-sans">
+        {lines.map((rawLine, idx) => {
+          const line = rawLine.trimEnd();
+          if (line.trim() === '---') {
+            return <hr key={idx} className="border-stone-200 my-2.5" />;
+          }
+          if (line.startsWith('### ')) {
+            return (
+              <h5 key={idx} className="font-serif-title font-bold text-sm text-stone-900 pt-1">
+                {renderInlineMarkdown(line.slice(4))}
+              </h5>
+            );
+          }
+          if (line.startsWith('#### ')) {
+            return (
+              <h6 key={idx} className="font-bold text-xs text-amber-950 pt-2">
+                {renderInlineMarkdown(line.slice(5))}
+              </h6>
+            );
+          }
+          if (line.trim() === '') {
+            return <div key={idx} className="h-1" />;
+          }
+          if (line.startsWith('- ') || line.startsWith('• ')) {
+            return (
+              <div key={idx} className="pl-3 flex items-start gap-1.5">
+                <span className="text-amber-700 font-bold">•</span>
+                <div className="flex-1">{renderInlineMarkdown(line.slice(2))}</div>
+              </div>
+            );
+          }
+          return <div key={idx}>{renderInlineMarkdown(line)}</div>;
+        })}
+      </div>
+    );
+  };
+
   const buildLocalArchiveFallback = (
     name: string,
     maiden: string,
@@ -87,17 +159,27 @@ export const ParishAssistantModal: React.FC<ParishAssistantModalProps> = ({
 
 ---
 
-#### 1. Příslušný archivní portál pro zadanou oblast:
-- **Doporučený archiv:** ${primary.name} (${primary.region})
+#### 1. Doporučený archivní portál:
+- **Příslušný archiv:** [${primary.name}](${directUrl}) (${primary.region})
 - **Pokrytí:** ${primary.coverage}
 - **Tip pro bádání:** ${primary.tips}
 
 #### 2. Postup vyhledání v online matrice:
-1. Otevřete vyhledávání v příslušném archivu přes tlačítka výše.
+1. Otevřete archivní badatelnu přes odkaz výše.
 2. Vyhledejte farnost podle obce **${loc || 'vašeho předka'}** a zkontrolujte **Indexy (rejstříky)** pro období **${year || 'dané doby'}** (±5 let).
-3. V matrice zapište číslo popisné (č.p.), pod kterým se v obci vyskytují i ostatní sourozenci a rodiče.`;
+3. V matrice si zapište číslo popisné (č.p.), pod kterým najdete i sourozence a rodiče.
 
-    const sources = matched.slice(0, 3).map(portal => ({
+#### 3. Přehled oficiálních digitálních archivů ČR:
+- [eBadatelna SOA v Praze](https://ebadatelna.soapraha.cz) – Střední Čechy
+- [ActaPublica (MZA Brno)](https://www.mza.cz/actapublica/matrika/hledani) – Morava a část Vysočiny
+- [Portafontium (SOA Plzeň)](https://www.portafontium.eu/searching/register) – Západní Čechy
+- [DigiArchiv SOA v Třeboni](https://digi.ceskearchivy.cz) – Jižní Čechy
+- [ARON Východočeské archivy](https://aron.vychodoceskearchivy.cz) – Východní Čechy (Zámrsk / HK)
+- [Digitální badatelna Litoměřice](https://digi.soalitomerice.cz) – Severní Čechy
+- [Digitální archiv ZA Opava](https://digi.archives.cz) – Slezsko a severní Morava
+- [Archiv hl. m. Prahy](https://katalog.ahmp.cz/pragapublica/) – Praha`;
+
+    const sources = (matched.length > 0 ? matched.slice(0, 4) : CZECH_ARCHIVE_PORTALS.slice(0, 4)).map(portal => ({
       title: portal.name,
       url: buildArchiveSearchUrl(portal, searchQuery)
     }));
@@ -574,8 +656,8 @@ export const ParishAssistantModal: React.FC<ParishAssistantModalProps> = ({
                   )}
 
                   {/* Formatted Analysis Content */}
-                  <div className="text-xs text-stone-800 leading-relaxed whitespace-pre-line font-sans bg-stone-50/50 p-4 rounded-xl border border-stone-100">
-                    {aiSearchResult}
+                  <div className="bg-stone-50/50 p-4 rounded-xl border border-stone-100">
+                    {renderMarkdownContent(aiSearchResult)}
                   </div>
 
                   {/* Quick Action: Pass to Transcriber & Tree */}
@@ -1047,8 +1129,8 @@ export const ParishAssistantModal: React.FC<ParishAssistantModalProps> = ({
                   <h4 className="font-serif-title font-bold text-sm text-stone-900 border-b border-stone-100 pb-2">
                     Doporučený postup archivního bádání:
                   </h4>
-                  <div className="text-xs text-stone-700 leading-relaxed whitespace-pre-line">
-                    {advisorAdvice}
+                  <div className="text-xs text-stone-700 leading-relaxed">
+                    {renderMarkdownContent(advisorAdvice)}
                   </div>
                 </div>
               )}

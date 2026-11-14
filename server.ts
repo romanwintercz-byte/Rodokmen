@@ -61,111 +61,117 @@ function formatGeminiError(error: any): string {
  * Maps Czech locations to their corresponding regional state archives & online portals
  */
 function determineArchiveByLocation(location: string = '') {
-  const loc = (location || '').toLowerCase().trim();
+  const loc = (location || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim();
 
   if (
     loc.includes('praha') &&
-    (loc.includes('město') || loc.includes('staré') || loc.includes('nové') || loc.includes('vinohrad') ||
-     loc.includes('žižkov') || loc.includes('smíchov') || loc.includes('karlín') || loc.includes('holešovic') ||
-     loc.includes('libeň') || loc.includes('vyšehrad') || loc.includes('hl. m.'))
+    (loc.includes('mesto') || loc.includes('stare') || loc.includes('nove') || loc.includes('vinohrad') ||
+     loc.includes('zizkov') || loc.includes('smichov') || loc.includes('karlin') || loc.includes('holesovic') ||
+     loc.includes('liben') || loc.includes('vysehrad') || loc.includes('hl. m.') || loc === 'praha')
   ) {
     return {
-      archiveName: 'Archiv hl. města Prahy (AMP)',
-      webUrl: 'http://katalog.ahmp.cz',
-      searchUrl: `http://katalog.ahmp.cz/pragapublica/search?q=${encodeURIComponent(location)}`,
-      tips: 'Zkontrolujte pražské matriky a zejména digitalizované Policejní přihlášky k pobytu (Konskripce 1850–1914), kde jsou uvedeni všichni členové rodiny i s přesnými daty a domovskými obcemi.'
+      archiveName: 'Archiv hl. města Prahy (AHMP – PragaPublica)',
+      webUrl: 'https://katalog.ahmp.cz/pragapublica/',
+      searchUrl: 'https://katalog.ahmp.cz/pragapublica/',
+      tips: 'Zkontrolujte pražské matriky a zejména digitalizované Policejní přihlášky k pobytu (1850–1914), kde jsou uvedeni všichni členové rodiny i s přesnými daty a domovskými obcemi.'
     };
   }
   if (
-    loc.includes('nelahozeves') || loc.includes('kladno') || loc.includes('rakovník') || loc.includes('mělník') ||
-    loc.includes('kutná hora') || loc.includes('kolín') || loc.includes('nymburk') || loc.includes('beroun') ||
-    loc.includes('příbram') || loc.includes('benešov') || loc.includes('mladá boleslav') || loc.includes('praha-východ') ||
-    loc.includes('praha-západ') || loc.includes('slaný') || loc.includes('středočesk')
+    loc.includes('nelahozeves') || loc.includes('kralupy') || loc.includes('kladno') || loc.includes('rakovnik') ||
+    loc.includes('melnik') || loc.includes('kutna hora') || loc.includes('kolin') || loc.includes('nymburk') ||
+    loc.includes('beroun') || loc.includes('pribram') || loc.includes('benesov') || loc.includes('mlada boleslav') ||
+    loc.includes('praha-vychod') || loc.includes('praha-zapad') || loc.includes('slany') || loc.includes('stredocesk') ||
+    loc.includes('drinov')
   ) {
     return {
-      archiveName: 'Státní oblastní archiv v Praze (ActaPublica / eBadatelna)',
-      webUrl: 'https://ebadatelna.soapraha.cz/pages/IndexPage',
-      searchUrl: `https://actapublica.eu/matriky/brno/?akce=hledat&obec=${encodeURIComponent(location)}`,
-      tips: 'Matriky Nelahozevsi i středních Čech jsou digitalizovány v systémech ActaPublica a eBadatelna SOA Praha. Pro Nelahozeves spadá farnost pod vikariát Kralupy nad Vltavou / Slaný.'
+      archiveName: 'eBadatelna SOA v Praze (Střední Čechy)',
+      webUrl: 'https://ebadatelna.soapraha.cz',
+      searchUrl: 'https://ebadatelna.soapraha.cz',
+      tips: 'Matriky Nelahozevsi a celých středních Čech jsou digitalizovány v systému eBadatelna SOA Praha. Na úvodní stránce zvolte sekci Matriky a zadejte farnost nebo obec.'
     };
   }
   if (
     loc.includes('brno') || loc.includes('morav') || loc.includes('znojmo') || loc.includes('jihlava') ||
-    loc.includes('třebíč') || loc.includes('žďár') || loc.includes('břeclav') || loc.includes('hodonín') ||
-    loc.includes('kroměříž') || loc.includes('vyškov') || loc.includes('blansko')
+    loc.includes('trebic') || loc.includes('zdar') || loc.includes('breclav') || loc.includes('hodonin') ||
+    loc.includes('kromeriz') || loc.includes('vyskov') || loc.includes('blansko') || loc.includes('uhersk') || loc.includes('zlin')
   ) {
     return {
-      archiveName: 'Moravský zemský archiv v Brně (ActaPublica)',
-      webUrl: 'https://actapublica.eu',
-      searchUrl: `https://actapublica.eu/matriky/brno/?akce=hledat&obec=${encodeURIComponent(location)}`,
-      tips: 'Portál ActaPublica.eu umožňuje přímé vyhledávání podle farnosti nebo obce. Každý záznam má trvalý odkaz (permalink).'
+      archiveName: 'ActaPublica – Moravský zemský archiv v Brně',
+      webUrl: 'https://www.mza.cz/actapublica/matrika/hledani',
+      searchUrl: 'https://www.mza.cz/actapublica/matrika/hledani',
+      tips: 'Nový oficiální portál MZA Brno umožňuje přímé vyhledávání podle farnosti nebo obce. Každá matriční kniha i snímek má trvalý odkaz.'
     };
   }
   if (
-    loc.includes('plzeň') || loc.includes('klatovy') || loc.includes('domažlice') || loc.includes('tachov') ||
-    loc.includes('rokycany') || loc.includes('karlovy vary') || loc.includes('cheb') || loc.includes('sokolov')
+    loc.includes('plzen') || loc.includes('klatovy') || loc.includes('domazlice') || loc.includes('tachov') ||
+    loc.includes('rokycany') || loc.includes('karlovy vary') || loc.includes('cheb') || loc.includes('sokolov') ||
+    loc.includes('susice') || loc.includes('stribro')
   ) {
     return {
-      archiveName: 'Státní oblastní archiv v Plzni (Portafontium)',
+      archiveName: 'Portafontium – SOA v Plzni (Západní Čechy)',
       webUrl: 'https://www.portafontium.eu',
-      searchUrl: `https://www.portafontium.eu/searching/register?search=${encodeURIComponent(location)}`,
-      tips: 'Portál Portafontium má vysoké rozlišení skenů a umožňuje hledat podle německých i českých historických názvů obcí (např. Pilsen, Klattau).'
+      searchUrl: 'https://www.portafontium.eu/searching/register',
+      tips: 'Portál Portafontium má vysoké rozlišení skenů. V sekci Matriky hledejte v poli „Místo“ podle českých i německých názvů obcí (např. Plzeň / Pilsen).'
     };
   }
   if (
-    loc.includes('české budějovice') || loc.includes('český krumlov') || loc.includes('třeboň') || loc.includes('jindřichův hradec') ||
-    loc.includes('písek') || loc.includes('prachatice') || loc.includes('strakonice') || loc.includes('tábor') || loc.includes('jihočesk')
+    loc.includes('ceske budejovice') || loc.includes('cesky krumlov') || loc.includes('trebon') || loc.includes('jindrichuv hradec') ||
+    loc.includes('pisek') || loc.includes('prachatice') || loc.includes('strakonice') || loc.includes('tabor') || loc.includes('jihocesk')
   ) {
     return {
-      archiveName: 'DigiArchiv SOA v Třeboni',
+      archiveName: 'DigiArchiv SOA v Třeboni (Jižní Čechy)',
       webUrl: 'https://digi.ceskearchivy.cz',
-      searchUrl: `https://digi.ceskearchivy.cz/search?q=${encodeURIComponent(location)}`,
-      tips: 'Kromě církevních matrik prohledejte i rožmberské a schwarzenberské soupisy poddaných a sčítací operáty z 19. století.'
+      searchUrl: 'https://digi.ceskearchivy.cz',
+      tips: 'V levém menu zvolte „Matriky“ → „Římskokatolická církev“ a vyhledejte obec. K dispozici jsou i soupisy poddaných a sčítací operáty.'
     };
   }
   if (
-    loc.includes('hradec') || loc.includes('pardubice') || loc.includes('chrudim') || loc.includes('náchod') ||
-    loc.includes('jičín') || loc.includes('rychnov') || loc.includes('svitavy') || loc.includes('trutnov') ||
-    loc.includes('zámrsk') || loc.includes('východočesk')
+    loc.includes('hradec') || loc.includes('pardubice') || loc.includes('chrudim') || loc.includes('nachod') ||
+    loc.includes('jicin') || loc.includes('rychnov') || loc.includes('svitavy') || loc.includes('trutnov') ||
+    loc.includes('zamrsk') || loc.includes('vychodocesk') || loc.includes('litomysl') || loc.includes('policka')
   ) {
     return {
-      archiveName: 'SOA v Hradci Králové (Portál ARON / Zámrsk)',
-      webUrl: 'https://aron.vychodoceskearchiv.cz',
-      searchUrl: `https://aron.vychodoceskearchiv.cz/apu?q=${encodeURIComponent(location)}`,
-      tips: 'Východočeské matriky jsou dostupné na portálu ARON s možností stahování a prohlížení celých knih i indexů.'
+      archiveName: 'ARON – SOA v Hradci Králové / Zámrsk (Východní Čechy)',
+      webUrl: 'https://aron.vychodoceskearchivy.cz',
+      searchUrl: `https://aron.vychodoceskearchivy.cz/apu?q=${encodeURIComponent(location)}`,
+      tips: 'Východočeské matriky jsou dostupné na oficiálním portálu ARON (vychodoceskearchivy.cz) s možností přímého hledání farností i prohlížení indexů.'
     };
   }
   if (
-    loc.includes('litoměřice') || loc.includes('ústí') || loc.includes('děčín') || loc.includes('teplice') ||
+    loc.includes('litomerice') || loc.includes('usti') || loc.includes('decin') || loc.includes('teplice') ||
     loc.includes('most') || loc.includes('chomutov') || loc.includes('louny') || loc.includes('liberec') ||
-    loc.includes('jablonec') || loc.includes('česká lípa') || loc.includes('severočesk')
+    loc.includes('jablonec') || loc.includes('ceska lipa') || loc.includes('severocesk') || loc.includes('zatec')
   ) {
     return {
-      archiveName: 'Státní oblastní archiv v Litoměřicích (Vademecum)',
-      webUrl: 'https://vademecum.soalitomerice.cz',
-      searchUrl: `https://vademecum.soalitomerice.cz/vademecum/search?q=${encodeURIComponent(location)}`,
-      tips: 'Aplikace Vademecum pro severní Čechy. Většina matrik před rokem 1945 je vedena německým kurentem (Sudety).'
+      archiveName: 'Digitální badatelna SOA v Litoměřicích (Severní Čechy)',
+      webUrl: 'https://digi.soalitomerice.cz',
+      searchUrl: 'https://digi.soalitomerice.cz',
+      tips: 'Nová badatelna pro severní Čechy. Většina matrik před rokem 1945 v pohraničí je vedena německým kurentem.'
     };
   }
   if (
-    loc.includes('opava') || loc.includes('ostrava') || loc.includes('olomouc') || loc.includes('frýdek') ||
-    loc.includes('karviná') || loc.includes('nový jičín') || loc.includes('přerov') || loc.includes('prostějov') ||
-    loc.includes('šumperk') || loc.includes('jeseník') || loc.includes('bruntál') || loc.includes('slezsk')
+    loc.includes('opava') || loc.includes('ostrava') || loc.includes('olomouc') || loc.includes('frydek') ||
+    loc.includes('karvina') || loc.includes('novy jicin') || loc.includes('prerov') || loc.includes('prostejov') ||
+    loc.includes('sumperk') || loc.includes('jesenik') || loc.includes('bruntal') || loc.includes('slezsk')
   ) {
     return {
-      archiveName: 'Zemský archiv v Opavě (Digiteka)',
+      archiveName: 'Digitální archiv ZA v Opavě (Slezsko & Severní Morava)',
       webUrl: 'https://digi.archives.cz',
-      searchUrl: `https://digi.archives.cz/matriky/search?query=${encodeURIComponent(location)}`,
-      tips: 'Digiteka ZA Opava pokrývá celé Slezsko a severní Moravu s přehledným stromem farností a signatur.'
+      searchUrl: 'https://digi.archives.cz',
+      tips: 'Digitální archiv ZA Opava pokrývá celé Slezsko a severní/střední Moravu s přehledným stromem farností a signatur.'
     };
   }
 
   // Generic fallback
   return {
-    archiveName: 'Český genealogický rozcestník (ActaPublica / FamilySearch)',
-    webUrl: 'https://www.actapublica.eu',
-    searchUrl: `https://www.familysearch.org/search/record/results?q.anyPlace=${encodeURIComponent(location)}`,
-    tips: 'Zadejte název obce nebo farnosti na portálu ActaPublica.eu nebo FamilySearch.org pro vyhledání příslušného farního obvodu.'
+    archiveName: 'eBadatelna SOA Praha / Rozcestník archivů ČR',
+    webUrl: 'https://ebadatelna.soapraha.cz',
+    searchUrl: `https://www.familysearch.org/cs/search/record/results?q.anyPlace=${encodeURIComponent(location)}`,
+    tips: 'Vyberte krajský archiv níže podle regionu obce nebo vyhledejte indexované záznamy na FamilySearch (vyžaduje bezplatné přihlášení).'
   };
 }
 
@@ -448,7 +454,7 @@ Prohledej online zdroje a uveď konkrétní farnost, archivní portál, signatur
 
 #### 1. Příslušný archiv a farní správa:
 - **Příslušný archivní portál:** [${archive.archiveName}](${archive.webUrl})
-- **Přímý odkaz pro vyhledání farnosti:** [Otevřít digitalizované fondy pro „${location || 'Česká republika'}“](${archive.searchUrl})
+- **Otevřít matriky:** [Přejít do digitální badatelny pro „${location || 'Česká republika'}“](${archive.searchUrl})
 - **Specifikum archivního fondu:** ${archive.tips}
 
 #### 2. Doporučené knihy a postup bádání:
@@ -457,21 +463,27 @@ Prohledej online zdroje a uveď konkrétní farnost, archivní portál, signatur
 3. **Číslo popisné (č.p.):** Zapište si číslo domu. Všechny další děti téže rodiny a úmrtí prarodičů bývají zapsány pod stejným číslem domu.
 4. **Sňatek rodičů:** Svatba se v 95 % případů odehrávala v rodné vsi a farnosti **nevěsty** (matky), obvykle 1 až 4 roky před narozením nejstaršího potomka.
 
-#### 3. Hlavní digitalizované archivy ČR:
-- [ActaPublica.eu](https://www.actapublica.eu) – Střední Čechy (SOA Praha) a Jižní Morava (MZA Brno)
-- [Portafontium.eu](https://www.portafontium.eu) – Západní Čechy (Plzeň, Klatovy, Karlovy Vary, Cheb)
+#### 3. Přehled oficiálních digitálních archivů ČR:
+- [eBadatelna SOA v Praze](https://ebadatelna.soapraha.cz) – Střední Čechy (Kladno, Mělník, Slaný, Kolín, Beroun, Benešov...)
+- [ActaPublica (MZA Brno)](https://www.mza.cz/actapublica/matrika/hledani) – Jižní a střední Morava, část Vysočiny
+- [Portafontium (SOA Plzeň)](https://www.portafontium.eu/searching/register) – Západní Čechy (Plzeň, Klatovy, Karlovy Vary, Cheb)
 - [DigiArchiv SOA v Třeboni](https://digi.ceskearchivy.cz) – Jižní Čechy (České Budějovice, Tábor, Krumlov)
-- [ARON Východočeské archivy](https://aron.vychodoceskearchiv.cz) – Hradec Králové, Pardubice, Zámrsk
-- [FamilySearch Česká republika](https://www.familysearch.org/search/location/continental-europe/czech-republic) – Mezinárodní genealogický index`;
+- [ARON Východočeské archivy](https://aron.vychodoceskearchivy.cz) – Hradec Králové, Pardubice, Zámrsk
+- [Digitální badatelna Litoměřice](https://digi.soalitomerice.cz) – Severní Čechy (Ústí, Teplice, Liberec, Louny)
+- [Digitální archiv ZA Opava](https://digi.archives.cz) – Moravskoslezský a Olomoucký kraj
+- [Archiv hl. m. Prahy](https://katalog.ahmp.cz/pragapublica/) – Pražské matriky a policejní přihlášky`;
+
+          const uniqueSources = [
+            { title: archive.archiveName, url: archive.searchUrl },
+            ...(archive.webUrl !== archive.searchUrl ? [{ title: 'Hlavní portál archivu', url: archive.webUrl }] : []),
+            { title: 'eBadatelna SOA Praha', url: 'https://ebadatelna.soapraha.cz' },
+            { title: 'ActaPublica MZA Brno', url: 'https://www.mza.cz/actapublica/matrika/hledani' }
+          ].filter((item, idx, arr) => arr.findIndex(x => x.url === item.url) === idx);
 
           return res.json({
             success: true,
             resultText: fallbackText,
-            sources: [
-              { title: archive.archiveName, url: archive.searchUrl },
-              { title: 'Archivní portál matrik', url: archive.webUrl },
-              { title: 'FamilySearch Česká republika', url: 'https://www.familysearch.org/search/location/continental-europe/czech-republic' }
-            ],
+            sources: uniqueSources,
             isFallback: true,
             notice: 'Rešerše byla sestavena z interní databáze českých archivů a matrik (bezplatná minutová kvóta Gemini API byla dočasně vyčerpána).'
           });
