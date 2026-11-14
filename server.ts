@@ -386,16 +386,14 @@ Prohledej online zdroje a uveď konkrétní farnost, archivní portál, signatur
 
     // Attempt 1: Gemini 3.8 Flash with Google Search Grounding
     try {
-      const response = await callGeminiWithRetry(() =>
-        ai.models.generateContent({
-          model: 'gemini-3.8-flash',
-          contents: prompt,
-          config: {
-            systemInstruction,
-            tools: [{ googleSearch: {} }],
-          }
-        }), 1, 1500
-      );
+      const response = await ai.models.generateContent({
+        model: 'gemini-3.8-flash',
+        contents: prompt,
+        config: {
+          systemInstruction,
+          tools: [{ googleSearch: {} }],
+        }
+      });
 
       const webSources = (response.candidates?.[0]?.groundingMetadata?.groundingChunks || [])
         .map((chunk: any) => ({

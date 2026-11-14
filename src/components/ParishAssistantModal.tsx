@@ -87,16 +87,24 @@ export const ParishAssistantModal: React.FC<ParishAssistantModalProps> = ({
           eventType: searchEventType
         })
       });
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        setAiSearchError(`Server vrátil neočekávanou odpověď (HTTP ${res.status}). Zkuste prosím akci za chvíli zopakovat.`);
+        return;
+      }
+
       const data = await res.json();
       if (data.success && data.resultText) {
         setAiSearchResult(data.resultText);
         setAiSearchSources(data.sources || []);
         setAiSearchNotice(data.notice || null);
       } else {
-        setAiSearchError(data.error || 'Nepodařilo se dokončit vyhledávání.');
+        setAiSearchError(data.error || `Nepodařilo se dokončit vyhledávání (HTTP ${res.status}).`);
       }
     } catch (err: any) {
-      setAiSearchError('Chyba spojení se serverem při rešerši v matrikách.');
+      setAiSearchError(
+        `Chyba spojení se serverem při rešerši v matrikách${err?.message ? ` (${err.message})` : ''}. Pokud probíhala aktualizace aplikace, obnovte prosím stránku.`
+      );
     } finally {
       setIsAiSearching(false);
     }
