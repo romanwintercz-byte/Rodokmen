@@ -245,7 +245,15 @@ export const FamilyChronicleView: React.FC<FamilyChronicleViewProps> = ({
                             {cit.parish} — {cit.signature || 'Signatura neuvedena'} ({cit.archiveName})
                           </span>
                           <span className="text-[10px] font-semibold px-2 py-0.5 rounded bg-amber-100 text-amber-900">
-                            {cit.bookType === 'N' ? 'Křest' : cit.bookType === 'O' ? 'Oddavky' : 'Úmrtí'}
+                            {cit.bookType === 'N'
+                              ? 'Křest'
+                              : cit.bookType === 'O'
+                                ? 'Oddavky'
+                                : cit.bookType === 'Z'
+                                  ? 'Úmrtí'
+                                  : cit.bookType === 'SCITANI'
+                                    ? 'Sčítací operát'
+                                    : 'Index'}
                           </span>
                         </div>
 

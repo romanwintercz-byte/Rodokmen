@@ -39,7 +39,7 @@ export const ParishAssistantModal: React.FC<ParishAssistantModalProps> = ({
   const [searchMaidenName, setSearchMaidenName] = useState(targetPerson?.maidenName || '');
   const [searchYear, setSearchYear] = useState(targetPerson?.birthDate ? (targetPerson.birthDate.split('.').pop() || '1841') : '1841');
   const [searchLocationAgent, setSearchLocationAgent] = useState(targetPerson?.birthPlace || 'Nelahozeves');
-  const [searchEventType, setSearchEventType] = useState<'Narození/křest' | 'Sňatek' | 'Úmrtí'>('Narození/křest');
+  const [searchEventType, setSearchEventType] = useState<'Narození/křest' | 'Sňatek' | 'Úmrtí' | 'Sčítací operát (sčítání lidu)'>('Narození/křest');
   const [isAiSearching, setIsAiSearching] = useState(false);
   const [aiSearchResult, setAiSearchResult] = useState<string | null>(null);
   const [aiSearchSources, setAiSearchSources] = useState<{ title: string; url: string }[]>([]);
@@ -48,9 +48,10 @@ export const ParishAssistantModal: React.FC<ParishAssistantModalProps> = ({
 
   // Tab 2: Archives Directory
   const [searchLocation, setSearchLocation] = useState(targetPerson?.birthPlace || targetPerson?.residence || '');
+  const [archiveCategoryFilter, setArchiveCategoryFilter] = useState<'all' | 'matriky' | 'scitani'>('all');
   
   // Tab 3: AI Transcribe & Extract
-  const [recordType, setRecordType] = useState<'N' | 'O' | 'Z'>('N');
+  const [recordType, setRecordType] = useState<'N' | 'O' | 'Z' | 'SCITANI'>('N');
   const [imageFile, setImageFile] = useState<string | null>(null);
   const [imageMime, setImageMime] = useState<string>('image/jpeg');
   const [textExcerpt, setTextExcerpt] = useState('');
@@ -156,8 +157,19 @@ export const ParishAssistantModal: React.FC<ParishAssistantModalProps> = ({
     loc: string,
     evType: string
   ) => {
-    const matched = findMatchingArchives(loc || '');
-    const primary = matched[0] || CZECH_ARCHIVE_PORTALS[0];
+    const isCensus = evType.toLowerCase().includes('sčítac');
+    const matchedAll = findMatchingArchives(loc || '');
+    const prioritized = isCensus
+      ? [
+          ...matchedAll.filter(p => p.category === 'scitani'),
+          ...matchedAll.filter(p => p.category !== 'scitani'),
+        ]
+      : matchedAll;
+    const primary =
+      prioritized[0] ||
+      (isCensus
+        ? CZECH_ARCHIVE_PORTALS.find(p => p.category === 'scitani') || CZECH_ARCHIVE_PORTALS[0]
+        : CZECH_ARCHIVE_PORTALS[0]);
     const searchQuery = loc || name || 'Česká republika';
     const directUrl = buildArchiveSearchUrl(primary, searchQuery);
 
@@ -165,7 +177,7 @@ export const ParishAssistantModal: React.FC<ParishAssistantModalProps> = ({
 
 **Hledaná lokalita:** ${loc || 'Česká republika'}  
 **Časové období:** okolo roku ${year || 'neuvedeno'}  
-**Hledaná událost:** ${evType || 'Narození/křest'}  
+**Hledaný pramen:** ${evType || 'Narození/křest'}  
 
 ---
 
@@ -174,22 +186,22 @@ export const ParishAssistantModal: React.FC<ParishAssistantModalProps> = ({
 - **Pokrytí:** ${primary.coverage}
 - **Tip pro bádání:** ${primary.tips}
 
-#### 2. Postup vyhledání v online matrice:
+#### 2. Postup vyhledání (matriky i sčítací operáty):
 1. Otevřete archivní badatelnu přes odkaz výše.
-2. Vyhledejte farnost podle obce **${loc || 'vašeho předka'}** a zkontrolujte **Indexy (rejstříky)** pro období **${year || 'dané doby'}** (±5 let).
-3. V matrice si zapište číslo popisné (č.p.), pod kterým najdete i sourozence a rodiče.
+2. **Pro matriky:** Vyhledejte farnost podle obce **${loc || 'vašeho předka'}** a zkontrolujte **Indexy (rejstříky)** pro období **${year || 'dané doby'}** (±5 let).
+3. **Pro sčítací operáty (1857, 1869, 1880, 1890, 1900, 1910, 1921):** Zvolte politický/soudní okres, obec a číslo popisné domu (č.p.) – na jednom sčítacím archu najdete všechny členy domácnosti s daty a místy narození.
 
-#### 3. Přehled oficiálních digitálních archivů ČR:
-- [eBadatelna SOA v Praze](https://ebadatelna.soapraha.cz) – Střední Čechy
-- [ActaPublica (MZA Brno)](https://www.mza.cz/actapublica/matrika/hledani) – Morava a část Vysočiny
-- [Portafontium (SOA Plzeň)](https://www.portafontium.eu/searching/register) – Západní Čechy
-- [DigiArchiv SOA v Třeboni](https://digi.ceskearchivy.cz) – Jižní Čechy
+#### 3. Přehled oficiálních portálů (Matriky & Sčítací operáty):
+- [eBadatelna SOA v Praze](https://ebadatelna.soapraha.cz) – Střední Čechy (matriky i sčítací operáty)
+- [Sčítací operáty MZA Brno](https://www.mza.cz/scitacioperaty/) & [ActaPublica MZA Brno](https://www.mza.cz/actapublica/matrika/hledani) – Morava a část Vysočiny
+- [Portafontium – Sčítání lidu](https://www.portafontium.eu/searching/census) & [Matriky](https://www.portafontium.eu/searching/register) – Západní Čechy
+- [DigiArchiv SOA v Třeboni](https://digi.ceskearchivy.cz) – Jižní Čechy (matriky, sčítání lidu, soupisy poddaných)
 - [ARON Východočeské archivy](https://aron.vychodoceskearchivy.cz) – Východní Čechy (Zámrsk / HK)
-- [Digitální badatelna Litoměřice](https://digi.soalitomerice.cz) – Severní Čechy
-- [Digitální archiv ZA Opava](https://digi.archives.cz) – Slezsko a severní Morava
-- [Archiv hl. m. Prahy](https://katalog.ahmp.cz/pragapublica/) – Praha`;
+- [Digitální badatelna Litoměřice](https://digi.soalitomerice.cz) – Severní Čechy (matriky a sčítání lidu)
+- [Digitální archiv ZA Opava](https://digi.archives.cz) – Slezsko a severní Morava (matriky a sčítání lidu)
+- [Archiv hl. m. Prahy](https://katalog.ahmp.cz/pragapublica/) – Praha (matriky, sčítání lidu 1869–1921 a policejní přihlášky)`;
 
-    const sources = (matched.length > 0 ? matched.slice(0, 4) : CZECH_ARCHIVE_PORTALS.slice(0, 4)).map(portal => ({
+    const sources = (prioritized.length > 0 ? prioritized.slice(0, 4) : CZECH_ARCHIVE_PORTALS.slice(0, 4)).map(portal => ({
       title: portal.name,
       url: buildArchiveSearchUrl(portal, searchQuery)
     }));
@@ -260,7 +272,9 @@ export const ParishAssistantModal: React.FC<ParishAssistantModalProps> = ({
 
   if (!isOpen) return null;
 
-  const filteredArchives = findMatchingArchives(searchLocation);
+  const filteredArchives = findMatchingArchives(searchLocation).filter(portal =>
+    archiveCategoryFilter === 'all' ? true : portal.category === archiveCategoryFilter
+  );
 
   // Handle file upload
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -276,10 +290,10 @@ export const ParishAssistantModal: React.FC<ParishAssistantModalProps> = ({
   };
 
   // Sample Kurent Text Presets
-  const loadPreset = (presetType: 'křest' | 'oddavky' | 'úmrtí') => {
+  const loadPreset = (presetType: 'křest' | 'oddavky' | 'úmrtí' | 'scitani') => {
     if (presetType === 'křest') {
       setRecordType('N');
-      setParishHint('Nelahozeves (SOA Praha, ActaPublica)');
+      setParishHint('Nelahozeves (eBadatelna SOA Praha)');
       setTextExcerpt(
         'Dne 8. Septembris 1841 narozen a 9. křtěn Antonín Leopold. ' +
         'Otec: František Dvořák, mistr řeznický a hospodský v Nelahozevsi č. 12, syn Jana Dvořáka chalupníka z Třeboradic č. 14 a Anny roz. Štěpánkové ze Slaného. ' +
@@ -294,6 +308,15 @@ export const ParishAssistantModal: React.FC<ParishAssistantModalProps> = ({
         'Ženich: Antonín Dvořák, varhaník a hudební skladatel v Praze č. 564, syn Františka Dvořáka řezníka a Anny roz. Bekové, 32 let, svobodný. ' +
         'Nevěsta: Anna Čermáková, dcera Jana Čermáka zlatníka na Novém Městě pražském a Marie roz. Klotzové, 19 let, svobodná. ' +
         'Svědkové: Adolf Čech, kapelník prozatímního divadla v Praze; Karel Bendl, skladatel.'
+      );
+    } else if (presetType === 'scitani') {
+      setRecordType('SCITANI');
+      setParishHint('Praha II – Nové Město č.p. 564, Sčítací operát 1900');
+      setTextExcerpt(
+        'Sčítací arch (Sčítání lidu ke dni 31. prosince 1900), Královské hlavní město Praha II, Žitná ulice č.p. 564. ' +
+        'Byt č. 3: 1) Dvořák Antonín, hlava rodiny, nar. 8. 9. 1841 v Nelahozevsi (okres Kralupy), ženatý, ředitel konzervatoře a skladatel, náboženství římskokatolické, domovská příslušnost Praha. ' +
+        '2) Dvořáková Anna roz. Čermáková, manželka, nar. 11. 12. 1854 v Praze. ' +
+        '3) Dvořáková Otýlie, dcera, nar. 6. 6. 1878 v Praze; 4) Dvořáková Magdalena, dcera, nar. 17. 8. 1881 v Praze; 5) Dvořák Otakar, syn, nar. 9. 2. 1885 v Praze.'
       );
     } else {
       setRecordType('Z');
@@ -522,7 +545,7 @@ export const ParishAssistantModal: React.FC<ParishAssistantModalProps> = ({
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold text-stone-700 mb-1">Hledaná událost:</label>
+                    <label className="block text-xs font-semibold text-stone-700 mb-1">Hledaná událost / pramen:</label>
                     <select
                       value={searchEventType}
                       onChange={e => setSearchEventType(e.target.value as any)}
@@ -531,6 +554,7 @@ export const ParishAssistantModal: React.FC<ParishAssistantModalProps> = ({
                       <option value="Narození/křest">★ Narození / křest</option>
                       <option value="Sňatek">⚭ Sňatek (oddavky)</option>
                       <option value="Úmrtí">† Úmrtí (pohřeb)</option>
+                      <option value="Sčítací operát (sčítání lidu)">📋 Sčítací operát (1857–1921)</option>
                     </select>
                   </div>
                 </div>
@@ -710,41 +734,52 @@ export const ParishAssistantModal: React.FC<ParishAssistantModalProps> = ({
                 <div className="space-y-4">
                   <div>
                     <label className="block text-xs font-semibold text-stone-700 mb-1">
-                      Typ matriční události:
+                      Typ archivního pramene:
                     </label>
-                    <div className="flex gap-2">
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                       <button
                         type="button"
                         onClick={() => setRecordType('N')}
-                        className={`flex-1 py-1.5 px-3 text-xs font-medium rounded-lg border transition-all ${
+                        className={`py-1.5 px-2.5 text-xs font-medium rounded-lg border transition-all ${
                           recordType === 'N'
                             ? 'bg-amber-800 text-white border-amber-800'
                             : 'bg-white text-stone-700 border-stone-300 hover:bg-stone-50'
                         }`}
                       >
-                        ★ Narození (Křty)
+                        ★ Narození
                       </button>
                       <button
                         type="button"
                         onClick={() => setRecordType('O')}
-                        className={`flex-1 py-1.5 px-3 text-xs font-medium rounded-lg border transition-all ${
+                        className={`py-1.5 px-2.5 text-xs font-medium rounded-lg border transition-all ${
                           recordType === 'O'
                             ? 'bg-amber-800 text-white border-amber-800'
                             : 'bg-white text-stone-700 border-stone-300 hover:bg-stone-50'
                         }`}
                       >
-                        ⚭ Oddavky (Svatby)
+                        ⚭ Oddavky
                       </button>
                       <button
                         type="button"
                         onClick={() => setRecordType('Z')}
-                        className={`flex-1 py-1.5 px-3 text-xs font-medium rounded-lg border transition-all ${
+                        className={`py-1.5 px-2.5 text-xs font-medium rounded-lg border transition-all ${
                           recordType === 'Z'
                             ? 'bg-amber-800 text-white border-amber-800'
                             : 'bg-white text-stone-700 border-stone-300 hover:bg-stone-50'
                         }`}
                       >
-                        † Úmrtí (Pohřby)
+                        † Úmrtí
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setRecordType('SCITANI')}
+                        className={`py-1.5 px-2.5 text-xs font-medium rounded-lg border transition-all ${
+                          recordType === 'SCITANI'
+                            ? 'bg-cyan-800 text-white border-cyan-800'
+                            : 'bg-white text-stone-700 border-stone-300 hover:bg-stone-50'
+                        }`}
+                      >
+                        📋 Sčítání
                       </button>
                     </div>
                   </div>
@@ -832,6 +867,14 @@ export const ParishAssistantModal: React.FC<ParishAssistantModalProps> = ({
                           className="text-amber-800 hover:underline font-medium"
                         >
                           Úmrtí
+                        </button>
+                        <span>•</span>
+                        <button
+                          type="button"
+                          onClick={() => loadPreset('scitani')}
+                          className="text-cyan-800 hover:underline font-medium"
+                        >
+                          Sčítací operát
                         </button>
                       </div>
                     </div>
@@ -984,20 +1027,55 @@ export const ParishAssistantModal: React.FC<ParishAssistantModalProps> = ({
                   <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
                   <input
                     type="text"
-                    placeholder="Vyhledat obec, farnost, okres nebo kraj (např. Nelahozeves, Klatovy, Třeboň)..."
+                    placeholder="Vyhledat obec, farnost, okres nebo sčítací operát (např. Nelahozeves, Brno, 1921)..."
                     value={searchLocation}
                     onChange={e => setSearchLocation(e.target.value)}
                     className="w-full pl-9 pr-4 py-2 bg-stone-50 text-xs border border-stone-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-700/30"
                   />
                 </div>
-                {searchLocation && (
+                <div className="flex items-center gap-1.5 shrink-0">
                   <button
-                    onClick={() => setSearchLocation('')}
-                    className="text-xs text-stone-500 hover:text-stone-800 font-medium"
+                    type="button"
+                    onClick={() => setArchiveCategoryFilter('all')}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
+                      archiveCategoryFilter === 'all'
+                        ? 'bg-stone-800 text-white border-stone-800'
+                        : 'bg-stone-50 text-stone-700 border-stone-200 hover:bg-stone-100'
+                    }`}
                   >
-                    Zrušit filtr
+                    Vše
                   </button>
-                )}
+                  <button
+                    type="button"
+                    onClick={() => setArchiveCategoryFilter('matriky')}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
+                      archiveCategoryFilter === 'matriky'
+                        ? 'bg-amber-800 text-white border-amber-800'
+                        : 'bg-stone-50 text-stone-700 border-stone-200 hover:bg-stone-100'
+                    }`}
+                  >
+                    Matriky
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setArchiveCategoryFilter('scitani')}
+                    className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors ${
+                      archiveCategoryFilter === 'scitani'
+                        ? 'bg-cyan-800 text-white border-cyan-800'
+                        : 'bg-stone-50 text-stone-700 border-stone-200 hover:bg-stone-100'
+                    }`}
+                  >
+                    Sčítací operáty
+                  </button>
+                  {searchLocation && (
+                    <button
+                      onClick={() => setSearchLocation('')}
+                      className="text-xs text-stone-500 hover:text-stone-800 font-medium pl-1"
+                    >
+                      Zrušit
+                    </button>
+                  )}
+                </div>
               </div>
 
               {/* Grid of Portals */}

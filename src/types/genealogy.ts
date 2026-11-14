@@ -8,7 +8,7 @@ export interface ParishCitation {
   id: string;
   archiveName: string; // e.g. "ActaPublica (SOA Praha)", "Portafontium (SOA Plzeň)", "SOA Zámrsk", "SOA Třeboň"
   parish: string; // Farnost (e.g. "Benešov", "Nelahozeves")
-  bookType: 'N' | 'O' | 'Z' | 'INDEX'; // Narození, Oddaní, Zemřelí, Index
+  bookType: 'N' | 'O' | 'Z' | 'INDEX' | 'SCITANI'; // Narození, Oddaní, Zemřelí, Index, Sčítací operát
   signature: string; // Signatura knihy (e.g. "Nelahozeves 04")
   folio: string; // Snímek / folio / strana (e.g. "fol. 78 / snímek 81")
   timeSpan?: string; // Časový rozsah (e.g. "1860–1885")
@@ -79,10 +79,11 @@ export interface CzechArchivePortal {
   description: string;
   tips: string;
   badgeColor: string;
+  category?: 'matriky' | 'scitani';
 }
 
 export interface AIAnalysisResult {
-  recordType: 'N' | 'O' | 'Z' | 'GENERAL';
+  recordType: 'N' | 'O' | 'Z' | 'SCITANI' | 'GENERAL';
   originalTranscription: string;
   languageDetected: string; // 'Kurent (němčina)', 'Stará čeština', 'Novodobá čeština', 'Latina'
   confidence: number;
@@ -112,7 +113,7 @@ export interface AIAnalysisResult {
   citationSuggestion: {
     archiveName?: string;
     parish?: string;
-    bookType?: 'N' | 'O' | 'Z' | 'INDEX';
+    bookType?: 'N' | 'O' | 'Z' | 'INDEX' | 'SCITANI';
     signature?: string;
     folio?: string;
   };

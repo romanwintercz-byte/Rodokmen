@@ -435,6 +435,7 @@ export const PersonDetailModal: React.FC<PersonDetailModalProps> = ({
                         <option value="N">Narození / křty</option>
                         <option value="O">Oddaní / sňatky</option>
                         <option value="Z">Zemřelí</option>
+                        <option value="SCITANI">Sčítací operát (sčítání lidu)</option>
                         <option value="INDEX">Rejstřík / Index</option>
                       </select>
                     </div>
@@ -519,7 +520,15 @@ export const PersonDetailModal: React.FC<PersonDetailModalProps> = ({
 
                       <div className="flex items-center gap-2">
                         <span className="text-[10px] px-2 py-0.5 rounded-full font-bold bg-amber-100 text-amber-900 border border-amber-300">
-                          {cit.bookType === 'N' ? 'Křest' : cit.bookType === 'O' ? 'Oddavky' : cit.bookType === 'Z' ? 'Úmrtí' : 'Index'}
+                          {cit.bookType === 'N'
+                            ? 'Křest'
+                            : cit.bookType === 'O'
+                              ? 'Oddavky'
+                              : cit.bookType === 'Z'
+                                ? 'Úmrtí'
+                                : cit.bookType === 'SCITANI'
+                                  ? 'Sčítací operát'
+                                  : 'Index'}
                         </span>
                         <h5 className="font-serif-title font-bold text-xs text-stone-900">
                           {cit.parish} {cit.signature && `(${cit.signature})`}
