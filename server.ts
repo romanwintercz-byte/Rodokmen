@@ -170,6 +170,10 @@ function determineArchiveByLocation(location: string = '') {
 }
 
 
+app.get('/api/health', (_req, res) => {
+  res.json({ ok: true, hasApiKey: Boolean(process.env.GEMINI_API_KEY) });
+});
+
 /**
  * Endpoint to transcribe and analyze historical parish records (Matriky)
  * Can handle handwritten Kurent, Latin, and Old Czech from image or text.

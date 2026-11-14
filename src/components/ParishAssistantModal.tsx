@@ -67,6 +67,47 @@ export const ParishAssistantModal: React.FC<ParishAssistantModalProps> = ({
   const [isAdvising, setIsAdvising] = useState(false);
   const [advisorAdvice, setAdvisorAdvice] = useState<string | null>(null);
 
+  const buildLocalArchiveFallback = (
+    name: string,
+    maiden: string,
+    year: string,
+    loc: string,
+    evType: string
+  ) => {
+    const matched = findMatchingArchives(loc || '');
+    const primary = matched[0] || CZECH_ARCHIVE_PORTALS[0];
+    const searchQuery = loc || name || 'Česká republika';
+    const directUrl = buildArchiveSearchUrl(primary, searchQuery);
+
+    const text = `### 🏛️ Archivní rozcestník pro osobu: **${name || 'Hledaný předek'}** ${maiden ? `(roz. ${maiden})` : ''}
+
+**Hledaná lokalita:** ${loc || 'Česká republika'}  
+**Časové období:** okolo roku ${year || 'neuvedeno'}  
+**Hledaná událost:** ${evType || 'Narození/křest'}  
+
+---
+
+#### 1. Příslušný archivní portál pro zadanou oblast:
+- **Doporučený archiv:** ${primary.name} (${primary.region})
+- **Pokrytí:** ${primary.coverage}
+- **Tip pro bádání:** ${primary.tips}
+
+#### 2. Postup vyhledání v online matrice:
+1. Otevřete vyhledávání v příslušném archivu přes tlačítka výše.
+2. Vyhledejte farnost podle obce **${loc || 'vašeho předka'}** a zkontrolujte **Indexy (rejstříky)** pro období **${year || 'dané doby'}** (±5 let).
+3. V matrice zapište číslo popisné (č.p.), pod kterým se v obci vyskytují i ostatní sourozenci a rodiče.`;
+
+    const sources = matched.slice(0, 3).map(portal => ({
+      title: portal.name,
+      url: buildArchiveSearchUrl(portal, searchQuery)
+    }));
+
+    return {
+      text,
+      sources: sources.length > 0 ? sources : [{ title: primary.name, url: directUrl }]
+    };
+  };
+
   // Run Autonomous AI Search
   const handleRunAiSearch = async () => {
     setIsAiSearching(true);
@@ -89,6 +130,21 @@ export const ParishAssistantModal: React.FC<ParishAssistantModalProps> = ({
       });
       const contentType = res.headers.get('content-type') || '';
       if (!contentType.includes('application/json')) {
+        if (res.status === 404) {
+          const fallback = buildLocalArchiveFallback(
+            searchPersonName,
+            searchMaidenName,
+            searchYear,
+            searchLocationAgent,
+            searchEventType
+          );
+          setAiSearchResult(fallback.text);
+          setAiSearchSources(fallback.sources);
+          setAiSearchNotice(
+            'Backendový AI server není na této adrese aktivní (HTTP 404 – pravděpodobně jste na statické/sdílené verzi URL). Byly načteny přímé odkazy z interní databáze českých archivů.'
+          );
+          return;
+        }
         setAiSearchError(`Server vrátil neočekávanou odpověď (HTTP ${res.status}). Zkuste prosím akci za chvíli zopakovat.`);
         return;
       }
@@ -181,6 +237,16 @@ export const ParishAssistantModal: React.FC<ParishAssistantModalProps> = ({
         })
       });
 
+      const contentType = response.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        if (response.status === 404) {
+          setAnalysisError('Backendový AI server není na této adrese dostupný (HTTP 404). Funkce AI přepisu vyžaduje spuštěný aplikační server (Development URL).');
+        } else {
+          setAnalysisError(`Server vrátil neočekávanou odpověď (HTTP ${response.status}).`);
+        }
+        return;
+      }
+
       const data = await response.json();
       if (data.success && data.data) {
         setAnalysisResult(data.data);
@@ -210,12 +276,24 @@ export const ParishAssistantModal: React.FC<ParishAssistantModalProps> = ({
           problemDescription: advisorQuestion
         })
       });
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        const matched = findMatchingArchives(advisorPlace || '');
+        const primary = matched[0] || CZECH_ARCHIVE_PORTALS[0];
+        setAdvisorAdvice(
+          `⚠️ Backendový AI server není na této adrese aktivní (HTTP ${res.status}).\n\nDoporučený archiv pro lokalitu „${advisorPlace || 'Česká republika'}“:\n• ${primary.name} (${primary.webUrl})\n• Tip: ${primary.tips}`
+        );
+        return;
+      }
       const data = await res.json();
       if (data.success && data.advice) {
         setAdvisorAdvice(data.advice);
+      } else if (data.error) {
+        setAdvisorAdvice(`⚠️ ${data.error}`);
       }
     } catch (err) {
       console.error(err);
+      setAdvisorAdvice('⚠️ Nepodařilo se spojit se serverem.');
     } finally {
       setIsAdvising(false);
     }
