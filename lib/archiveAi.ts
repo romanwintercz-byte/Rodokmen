@@ -1,4 +1,4 @@
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 
 export function getConfiguredApiKey(): string {
   const raw =
@@ -255,10 +255,11 @@ Pokud je přiložen obrázek, pozorně rozlušti rukopisný kurent, švabach neb
 
   const response = await callGeminiWithRetry(() =>
     ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+      model: 'gemini-4-hydrogen',
       contents: { parts },
       config: {
         systemInstruction,
+        thinkingConfig: { thinkingLevel: ThinkingLevel.MEDIUM },
         responseMimeType: 'application/json',
         responseSchema: {
           type: Type.OBJECT,
@@ -379,12 +380,15 @@ Otázka / problém: ${problemDescription || 'Kde mám začít a v jakém archivu
     const response = await withTimeout(
       callGeminiWithRetry(() =>
         ai.models.generateContent({
-          model: 'gemini-3.8-flash',
+          model: 'gemini-4-hydrogen',
           contents: prompt,
-          config: { systemInstruction }
+          config: {
+            systemInstruction,
+            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+          }
         })
       ),
-      8500
+      25000
     );
     return { success: true, advice: response.text };
   } catch (aiErr: any) {
@@ -476,36 +480,59 @@ export async function runAiSearch(body: any) {
 
   const ai = getGeminiClient();
 
-  const systemInstruction = `Jsi přední český genealogický rešeršér a archivář specializovaný na online matriky České republiky a sčítací operáty / sčítání lidu (1857–1921) v archivech ČR (eBadatelna SOA Praha, ActaPublica a mza.cz/scitacioperaty MZA Brno, Portafontium SOA Plzeň, DigiArchiv Třeboň, ARON Zámrsk, Digitální badatelna Litoměřice, Digitální archiv Opava, Archiv hl. m. Prahy a FamilySearch).
-Tvým úkolem je provést pro badatele podrobnou rešerši:
-1. Urči přesný státní oblastní archiv, příslušný farní úřad (farnost) a pro sčítací operáty také historický politický/soudní okres.
-2. Urči konkrétní matriční knihy a signatury (např. Nelahozeves 04, Narození 1835-1850) a příslušné ročníky sčítacích operátů (1869, 1880, 1890, 1900, 1910, 1921).
-3. Vyhledej indexované záznamy, zmínky a farní příslušnost obce.
-4. Připrav jasný strukturovaný výstup:
-   - Příslušný online archiv, farnost a sekce sčítacích operátů
-   - Doporučené signatury, ročníky sčítání a časové rozsahy knih
-   - Přímé odkazy pro badatele (používej VÝHRADNĚ funkční oficiální URL: https://ebadatelna.soapraha.cz pro Střední Čechy, https://www.mza.cz/actapublica/matrika/hledani a https://www.mza.cz/scitacioperaty/ pro Moravu, https://www.portafontium.eu/searching/register a https://www.portafontium.eu/searching/census pro Západní Čechy, https://digi.ceskearchivy.cz pro Jižní Čechy, https://aron.vychodoceskearchivy.cz pro Východní Čechy, https://digi.soalitomerice.cz pro Severní Čechy, https://digi.archives.cz pro Slezsko/Opavu, https://katalog.ahmp.cz/pragapublica/ pro Prahu — NIKDY nepoužívej zastaralou doménu actapublica.eu ani vymyšlené sub-URL končící 404).
-   - Nalezená genealogická data k začlenění do rodokmenu.`;
+  const isCensusSearch = String(eventType || '').toLowerCase().includes('sčítac');
 
-  const prompt = `Proveď rešerši pro osobu v českých matrikách a sčítacích operátech:
+  const systemInstruction = isCensusSearch
+    ? `Jsi přední český genealogický rešeršér a archivář specializovaný na digitalizované sčítací operáty a sčítání lidu (1857, 1869, 1880, 1890, 1900, 1910, 1921) v archivech ČR (mza.cz/scitacioperaty, Portafontium searching/census, eBadatelna SOA Praha, DigiArchiv Třeboň, ARON Zámrsk, SOA Litoměřice, ZA Opava, AHMP PragaPublica, FamilySearch).
+Tvým úkolem je provést pro badatele cílenou rešerši sčítacích operátů:
+1. Urči přesný archivní portál, historický politický a soudní okres pro zadanou obec.
+2. Vyhledej dostupné ročníky sčítacích operátů (1857–1921), konkrétní fond, inv. č., karton nebo číslo snímku/strany, pokud jsou indexované online.
+3. Připrav jasný strukturovaný výstup:
+   - Příslušný online archiv pro sčítání lidu a politický/soudní okres
+   - Konkrétní ročníky sčítání, fondy / signatury a případná čísla snímků nebo stran
+   - Přímé ověřené odkazy (VÝHRADNĚ funkční oficiální URL: https://ebadatelna.soapraha.cz, https://www.mza.cz/scitacioperaty/, https://www.portafontium.eu/searching/census, https://digi.ceskearchivy.cz, https://aron.vychodoceskearchivy.cz, https://digi.soalitomerice.cz, https://digi.archives.cz, https://katalog.ahmp.cz/pragapublica/, případně konkrétní URL nalezené přes Google Search).
+   - Praktický postup vyhledání podle obce a čísla popisného (č.p.).`
+    : `Jsi přední český genealogický rešeršér a archivář specializovaný na online matriky České republiky (eBadatelna SOA Praha, ActaPublica MZA Brno, Portafontium SOA Plzeň, DigiArchiv Třeboň, ARON Zámrsk, Digitální badatelna Litoměřice, Digitální archiv Opava, Archiv hl. m. Prahy a FamilySearch).
+Tvým úkolem je najít pro badatele KONKRÉTNÍ matriční knihu a KONKRÉTNÍ stránku / folio / snímek / indexovaný zápis dané osoby:
+1. Aktivně pomocí Google Search prohledej online indexy, katalogy archivů a přepisy (FamilySearch, ActaPublica, Portafontium, DigiArchiv Třeboň, eBadatelna SOA Praha, ARON Zámrsk, Litoměřice, Opava, AHMP, Geni, Rodokmeny) pro zadané jméno, rok a obec.
+2. Urči přesný státní oblastní archiv, příslušný římskokatolický (příp. evangelický/civilní) farní úřad (farnost), pod který obec v daném roce spadala.
+3. Uveď KONKRÉTNÍ matriční knihu (signaturu / inv. č., např. „sign. Nelahozeves 04“, časový rozsah knihy, obsah obcí) a pokud se podaří dohledat konkrétní zápis online, VŽDY výslovně uveď:
+   - přesné číslo stránky / folia / snímku / matričního zápisu
+   - přesné datum narození/křtu, sňatku či úmrtí
+   - číslo domu (č.p.) a jména rodičů / svědků z indexu.
+   Pokud přesná stránka není veřejně indexována online, uveď přesnou knihu (signaturu + roky) a jak v ní pomocí indexu či chronologického řazení stránku rychle nalistovat.
+4. Používej VÝHRADNĚ ověřené přímé odkazy z vyhledávání nebo oficiální URL archivů (https://ebadatelna.soapraha.cz, https://www.mza.cz/actapublica/matrika/hledani, https://www.portafontium.eu/searching/register, https://digi.ceskearchivy.cz, https://aron.vychodoceskearchivy.cz, https://digi.soalitomerice.cz, https://digi.archives.cz, https://katalog.ahmp.cz/pragapublica/ — NIKDY nepoužívej zastaralou doménu actapublica.eu ani vymyšlené sub-URL končící 404).`;
+
+  const prompt = isCensusSearch
+    ? `Vyhledej sčítací operáty (sčítání lidu 1857–1921) pro osobu a obec:
 Jméno a příjmení: ${personName || ''} ${maidenName ? `(roz. ${maidenName})` : ''}
-Období / rok: ${birthYear || 'neuvedeno'}
-Místo / obec: ${location || 'Česká republika'}
-Hledaná událost / pramen: ${eventType || 'Narození/křest'}
+Období / rok: ${birthYear || '1857–1921'}
+Obec / lokalita: ${location || 'Česká republika'}
 
-Prohledej online zdroje a uveď konkrétní farnost, archivní portál (pro matriky i sčítací operáty 1857–1921), politický okres, signatury knih a postup pro badatele.`;
+Najdi příslušný archivní portál pro sčítací operáty, historický politický/soudní okres, dostupné ročníky sčítání, fondy/signatury a pokud jsou indexovány online, tak konkrétní snímky nebo strany.`
+    : `Vyhledej v online matrikách a genealogických indexech konkrétní matriční knihu (signaturu) a stránku / folio / snímek pro tento záznam:
+Jméno a příjmení: ${personName || ''} ${maidenName ? `(roz. ${maidenName})` : ''}
+Událost: ${eventType || 'Narození/křest'}
+Přibližný rok / datum: ${birthYear || 'neuvedeno'}
+Obec / farnost: ${location || 'Česká republika'}
+
+Zaměř se na:
+1. Příslušnou farnost a oblastní archiv.
+2. Konkrétní matriční knihu (signatura / inv. č. a rozsah let pro danou událost).
+3. Konkrétní stránku, folio, číslo snímku nebo indexovaný matriční zápis, pokud je v online indexech (FamilySearch, archivy ČR) dohledatelný.`;
 
   try {
     const response = await withTimeout(
       ai.models.generateContent({
-        model: 'gemini-3.8-flash',
+        model: 'gemini-4-hydrogen',
         contents: prompt,
         config: {
           systemInstruction,
+          thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
           tools: [{ googleSearch: {} }],
         }
       }),
-      8500
+      22000
     );
 
     const webSources = (response.candidates?.[0]?.groundingMetadata?.groundingChunks || [])
@@ -521,6 +548,7 @@ Prohledej online zdroje a uveď konkrétní farnost, archivní portál (pro matr
       sources: webSources
     };
   } catch (primaryErr: any) {
+    console.warn('[ai-search] primary Google Search call failed:', primaryErr?.status || '', primaryErr?.message || primaryErr);
     if (isMissingApiKeyError(primaryErr)) {
       return buildAiSearchFallbackResponse(
         personName,
@@ -531,25 +559,19 @@ Prohledej online zdroje a uveď konkrétní farnost, archivní portál (pro matr
         'Na serveru není nastavený platný GEMINI_API_KEY (Vercel → Settings → Environment Variables → Redeploy). Byly načteny přímé odkazy z interní databáze českých archivů.'
       );
     }
-    if (isTimeoutError(primaryErr)) {
-      return buildAiSearchFallbackResponse(
-        personName,
-        maidenName,
-        birthYear,
-        location,
-        eventType,
-        'Vyhledávání AI na externím serveru trvalo příliš dlouho, proto byly zobrazeny ověřené přímé odkazy z interní databáze českých archivů a sčítacích operátů.'
-      );
-    }
-    if (isRateLimitError(primaryErr)) {
+
+    if (isRateLimitError(primaryErr) || isTimeoutError(primaryErr)) {
       try {
         const textOnlyResponse = await withTimeout(
           ai.models.generateContent({
-            model: 'gemini-3.8-flash',
+            model: 'gemini-4-hydrogen',
             contents: prompt,
-            config: { systemInstruction }
+            config: {
+              systemInstruction,
+              thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+            }
           }),
-          6000
+          10000
         );
 
         const archive = determineArchiveByLocation(location);
@@ -558,18 +580,22 @@ Prohledej online zdroje a uveď konkrétní farnost, archivní portál (pro matr
           resultText: textOnlyResponse.text,
           sources: [
             { title: archive.archiveName, url: archive.searchUrl },
-            { title: archive.censusName, url: archive.censusUrl },
-            ...(archive.webUrl !== archive.searchUrl ? [{ title: 'Online archiv', url: archive.webUrl }] : [])
-          ]
+            ...(isCensusSearch ? [{ title: archive.censusName, url: archive.censusUrl }] : []),
+            ...(archive.webUrl !== archive.searchUrl ? [{ title: 'Hlavní portál archivu', url: archive.webUrl }] : [])
+          ],
+          notice: 'Rešerše byla vygenerována přímo AI modelem bez živého Google Search indexu (externí vyhledávání bylo dočasně zpomalené nebo v limitu). Konkrétní číslo stránky/snímku ověřte v uvedené knize.'
         };
-      } catch (_secondaryErr: any) {
+      } catch (secondaryErr: any) {
+        console.warn('[ai-search] secondary text fallback failed:', secondaryErr?.status || '', secondaryErr?.message || secondaryErr);
         return buildAiSearchFallbackResponse(
           personName,
           maidenName,
           birthYear,
           location,
           eventType,
-          'Rešerše byla sestavena z interní databáze českých archivů a matrik (bezplatná minutová kvóta Gemini API byla dočasně vyčerpána).'
+          isTimeoutError(primaryErr)
+            ? 'Vyhledávání AI na externím serveru trvalo příliš dlouho, proto byly zobrazeny ověřené přímé odkazy z interní databáze českých archivů.'
+            : 'Rešerše byla sestavena z interní databáze českých archivů a matrik (minutová kvóta Gemini API byla dočasně vyčerpána – zkuste prosím vyhledání zopakovat za 30–60 s).'
         );
       }
     }

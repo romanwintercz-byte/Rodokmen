@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Person, CzechArchivePortal, AIAnalysisResult } from '../types/genealogy';
 import { CZECH_ARCHIVE_PORTALS, findMatchingArchives, buildArchiveSearchUrl } from '../data/czechArchives';
 import { 
@@ -45,6 +45,7 @@ export const ParishAssistantModal: React.FC<ParishAssistantModalProps> = ({
   const [aiSearchSources, setAiSearchSources] = useState<{ title: string; url: string }[]>([]);
   const [aiSearchError, setAiSearchError] = useState<string | null>(null);
   const [aiSearchNotice, setAiSearchNotice] = useState<string | null>(null);
+  const [aiSearchIsFallback, setAiSearchIsFallback] = useState(false);
 
   // Tab 2: Archives Directory
   const [searchLocation, setSearchLocation] = useState(targetPerson?.birthPlace || targetPerson?.residence || '');
@@ -67,6 +68,23 @@ export const ParishAssistantModal: React.FC<ParishAssistantModalProps> = ({
   const [advisorQuestion, setAdvisorQuestion] = useState('Nemohu najít sňatek rodičů v matrice narození potomka. Kde mám hledat?');
   const [isAdvising, setIsAdvising] = useState(false);
   const [advisorAdvice, setAdvisorAdvice] = useState<string | null>(null);
+
+  // Sync form inputs whenever targetPerson or modal visibility changes
+  useEffect(() => {
+    if (!isOpen) return;
+    if (targetPerson) {
+      setSearchPersonName(`${targetPerson.firstName} ${targetPerson.lastName}`.trim());
+      setSearchMaidenName(targetPerson.maidenName || '');
+      const yr = targetPerson.birthDate ? targetPerson.birthDate.match(/\b(1[6-9]\d{2}|20\d{2})\b/)?.[1] : '';
+      setSearchYear(yr || '');
+      setSearchLocationAgent(targetPerson.birthPlace || targetPerson.residence || '');
+      setSearchLocation(targetPerson.birthPlace || targetPerson.residence || '');
+      setParishHint(targetPerson.birthPlace || '');
+      setAdvisorName(`${targetPerson.firstName} ${targetPerson.lastName}`.trim());
+      setAdvisorPlace(targetPerson.birthPlace || '');
+      setAdvisorYear(yr || targetPerson.birthDate || '1850');
+    }
+  }, [targetPerson, isOpen]);
 
   const renderInlineMarkdown = (text: string): React.ReactNode[] => {
     // Parse [label](https://...) and **bold** inline segments safely
@@ -136,11 +154,20 @@ export const ParishAssistantModal: React.FC<ParishAssistantModalProps> = ({
               </div>
             );
           }
-          if (line.startsWith('- ') || line.startsWith('• ')) {
+          if (line.startsWith('- ') || line.startsWith('• ') || line.startsWith('* ')) {
             return (
               <div key={idx} className="pl-3 flex items-start gap-1.5">
                 <span className="text-amber-700 font-bold">•</span>
                 <div className="flex-1">{renderInlineMarkdown(line.slice(2))}</div>
+              </div>
+            );
+          }
+          const numberedMatch = line.match(/^(\d+\.)\s+(.*)$/);
+          if (numberedMatch) {
+            return (
+              <div key={idx} className="pl-2 flex items-start gap-1.5">
+                <span className="text-amber-800 font-bold shrink-0">{numberedMatch[1]}</span>
+                <div className="flex-1">{renderInlineMarkdown(numberedMatch[2])}</div>
               </div>
             );
           }
@@ -219,6 +246,7 @@ export const ParishAssistantModal: React.FC<ParishAssistantModalProps> = ({
     setAiSearchResult(null);
     setAiSearchSources([]);
     setAiSearchNotice(null);
+    setAiSearchIsFallback(false);
 
     try {
       const res = await fetch('/api/archives/ai-search', {
@@ -247,6 +275,7 @@ export const ParishAssistantModal: React.FC<ParishAssistantModalProps> = ({
           setAiSearchNotice(
             'Backendový AI server není na této adrese aktivní (HTTP 404 – pravděpodobně jste na statické/sdílené verzi URL). Byly načteny přímé odkazy z interní databáze českých archivů.'
           );
+          setAiSearchIsFallback(true);
           return;
         }
         setAiSearchError(`Server vrátil neočekávanou odpověď (HTTP ${res.status}). Zkuste prosím akci za chvíli zopakovat.`);
@@ -258,6 +287,7 @@ export const ParishAssistantModal: React.FC<ParishAssistantModalProps> = ({
         setAiSearchResult(data.resultText);
         setAiSearchSources(data.sources || []);
         setAiSearchNotice(data.notice || null);
+        setAiSearchIsFallback(Boolean(data.isFallback));
       } else {
         setAiSearchError(data.error || `Nepodařilo se dokončit vyhledávání (HTTP ${res.status}).`);
       }
@@ -428,7 +458,7 @@ export const ParishAssistantModal: React.FC<ParishAssistantModalProps> = ({
               <h2 className="font-serif-title font-bold text-lg text-amber-100 flex items-center gap-2">
                 <span>Online Matriky &amp; AI Asistent</span>
                 <span className="text-[10px] bg-amber-500/30 border border-amber-400/30 px-2 py-0.5 rounded-full text-amber-200 font-sans uppercase tracking-wider">
-                  Gemini 3.8 Flash
+                  Gemini 4 Flash
                 </span>
               </h2>
               <p className="text-xs text-stone-300">
@@ -648,9 +678,17 @@ export const ParishAssistantModal: React.FC<ParishAssistantModalProps> = ({
                       <span>Výsledek rešerše pro: {searchPersonName} ({searchLocationAgent})</span>
                     </h4>
                     <span className={`text-[11px] px-2.5 py-1 rounded-full font-semibold ${
-                      aiSearchNotice ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-emerald-100 text-emerald-800'
+                      aiSearchIsFallback
+                        ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                        : aiSearchNotice
+                          ? 'bg-sky-100 text-sky-900 border border-sky-200'
+                          : 'bg-emerald-100 text-emerald-800'
                     }`}>
-                      {aiSearchNotice ? '🏛️ Archivní rozcestník ČR' : 'Zpracováno AI & Google Search'}
+                      {aiSearchIsFallback
+                        ? '🏛️ Archivní rozcestník ČR'
+                        : aiSearchNotice
+                          ? '✨ AI model (bez živého indexu)'
+                          : 'Zpracováno AI & Google Search'}
                     </span>
                   </div>
 
@@ -659,9 +697,11 @@ export const ParishAssistantModal: React.FC<ParishAssistantModalProps> = ({
                       <AlertCircle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
                       <div className="space-y-0.5">
                         <p className="font-semibold">{aiSearchNotice}</p>
-                        <p className="text-[11px] text-amber-800">
-                          Níže naleznete přesné fondy, odkazy do online matrik i doporučené signatury pro vyhledání osoby.
-                        </p>
+                        {aiSearchIsFallback && (
+                          <p className="text-[11px] text-amber-800">
+                            Níže naleznete odkazy do online archivů. Pro vyhledání konkrétní knihy a čísla stránky je potřeba funkční AI připojení.
+                          </p>
+                        )}
                       </div>
                     </div>
                   )}
