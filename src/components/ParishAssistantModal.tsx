@@ -125,6 +125,16 @@ export const ParishAssistantModal: React.FC<ParishAssistantModalProps> = ({
           if (line.trim() === '') {
             return <div key={idx} className="h-1" />;
           }
+          if (line.startsWith('> ')) {
+            return (
+              <div
+                key={idx}
+                className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-amber-900 font-medium"
+              >
+                {renderInlineMarkdown(line.slice(2))}
+              </div>
+            );
+          }
           if (line.startsWith('- ') || line.startsWith('• ')) {
             return (
               <div key={idx} className="pl-3 flex items-start gap-1.5">

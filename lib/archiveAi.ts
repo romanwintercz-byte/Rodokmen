@@ -1,7 +1,19 @@
 import { GoogleGenAI, Type } from '@google/genai';
 
+export function getConfiguredApiKey(): string {
+  const raw =
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_API_KEY ||
+    process.env.GOOGLE_GENERATIVE_AI_API_KEY ||
+    '';
+  return raw.trim();
+}
+
 export function getGeminiClient() {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const apiKey = getConfiguredApiKey();
+  if (!apiKey) {
+    throw new Error('MISSING_GEMINI_API_KEY');
+  }
   return new GoogleGenAI({
     apiKey,
     httpOptions: {
@@ -17,6 +29,19 @@ export function isRateLimitError(err: any): boolean {
   if (err?.status === 429 || err?.status === 'RESOURCE_EXHAUSTED' || err?.code === 429) return true;
   const msg = typeof err === 'string' ? err : err?.message || JSON.stringify(err);
   return msg.includes('429') || msg.includes('quota') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('rate-limit');
+}
+
+export function isMissingApiKeyError(err: any): boolean {
+  if (!err) return false;
+  if (err?.status === 401 || err?.status === 403) return true;
+  const msg = typeof err === 'string' ? err : err?.message || JSON.stringify(err);
+  return (
+    msg.includes('MISSING_GEMINI_API_KEY') ||
+    msg.includes('default credentials') ||
+    msg.includes('API key') ||
+    msg.includes('API_KEY_INVALID') ||
+    msg.includes('UNAUTHENTICATED')
+  );
 }
 
 export async function callGeminiWithRetry<T>(fn: () => Promise<T>, retries = 1, delayMs = 2000): Promise<T> {
@@ -35,10 +60,10 @@ export function formatGeminiError(error: any): string {
   if (isRateLimitError(error)) {
     return 'Byla dočasně překročena bezplatná minutová kvóta požadavků (HTTP 429 - Rate limit na bezplatném plánu Gemini API). Počkejte prosím přibližně 30 až 60 sekund a zkuste požadavek odeslat znovu.';
   }
-  const msg = error?.message || '';
-  if (msg.includes('API key') || msg.includes('API_KEY_INVALID') || error?.status === 401 || error?.status === 403) {
-    return 'Chybí nebo je neplatný GEMINI_API_KEY v proměnných prostředí serveru.';
+  if (isMissingApiKeyError(error)) {
+    return 'Na serveru není nastavený platný GEMINI_API_KEY. Pokud aplikaci provozujete na Vercelu, přidejte proměnnou GEMINI_API_KEY v Settings → Environment Variables a spusťte Redeploy.';
   }
+  const msg = error?.message || '';
   return msg || 'Nastala chyba při komunikaci s AI modelem.';
 }
 
@@ -257,8 +282,42 @@ Pokud je přiložen obrázek, pozorně rozlušti rukopisný kurent nebo latinu.`
   return JSON.parse(resultText);
 }
 
+function buildAdvisorFallback(personName: string, parishOrPlace: string, yearRange: string, reasonNotice?: string) {
+  const archive = determineArchiveByLocation(parishOrPlace);
+  return `${reasonNotice ? `> ⚠️ ${reasonNotice}\n\n` : ''}### 💡 Genealogická rada pro: **${personName || 'Hledaného předka'}**
+**Lokalita:** ${parishOrPlace || 'neuvedeno'} (${archive.archiveName})  
+**Období:** ${yearRange || 'neuvedeno'}
+
+---
+
+#### 1. Doporučený archivní portál pro tuto oblast:
+- **Portál:** [${archive.archiveName}](${archive.webUrl})
+- **Otevřít digitální badatelnu:** [Přejít do archivu pro „${parishOrPlace || 'obec'}“](${archive.searchUrl})
+- **Specifikum archivu:** ${archive.tips}
+
+#### 2. Kde hledat, pokud zápis v matrice chybí:
+1. **Svatba v rodné obci nevěsty:** Drtivá většina sňatků v českých zemích se konala ve farnosti nevěsty. Pokud znáte jen obec ženicha, hledejte nejprve narození jejich dětí – v zápisech křtů bývá uvedeno přesné rodné příjmení a rodiště matky (nevěsty).
+2. **Rejstříky / Indexy oddaných (Index O):** Hledejte v indexech oddaných s tolerancí ±5 let kolem odhadovaného roku sňatku.
+3. **Policejní přihlášky a sčítání lidu (1869–1921):** V operátech sčítání lidu jsou zapsáni všichni členové domácnosti včetně přesných dat a míst narození.
+4. **Pozemkové a gruntovní knihy:** U rolnických a chalupnických rodů obsahují smlouvy o postoupení gruntu a svatební smlouvy s přesnými příbuzenskými vztahy.`;
+}
+
 export async function runAdvisor(body: any) {
   const { personName, parishOrPlace, yearRange, problemDescription } = body || {};
+
+  if (!getConfiguredApiKey()) {
+    return {
+      success: true,
+      advice: buildAdvisorFallback(
+        personName,
+        parishOrPlace,
+        yearRange,
+        'Na serveru není nastavený GEMINI_API_KEY (Vercel → Settings → Environment Variables → Redeploy). Níže jsou zobrazeny doporučené české archivy z interní databáze.'
+      ),
+      isFallback: true,
+    };
+  }
+
   const ai = getGeminiClient();
 
   const systemInstruction = `Jsi zkušený český rodopisec a archivní poradce. Pomáháš badatelům hledat v českých a moravských archivech (eBadatelna SOA Praha, ActaPublica MZA Brno, Portafontium, Třeboň, ARON Zámrsk, Litoměřice, Opava, AMP, FamilySearch, Národní archiv).
@@ -284,33 +343,88 @@ Otázka / problém: ${problemDescription || 'Kde mám začít a v jakém archivu
     );
     return { success: true, advice: response.text };
   } catch (aiErr: any) {
-    if (isRateLimitError(aiErr)) {
-      const archive = determineArchiveByLocation(parishOrPlace);
-      const fallbackAdvice = `### 💡 Genealogická rada pro: **${personName || 'Hledaného předka'}**
-**Lokalita:** ${parishOrPlace || 'neuvedeno'} (${archive.archiveName})  
-**Období:** ${yearRange || 'neuvedeno'}
-
----
-
-#### 1. Doporučený archivní portál pro tuto oblast:
-- **Portál:** [${archive.archiveName}](${archive.webUrl})
-- **Otevřít digitální badatelnu:** [Přejít do archivu pro „${parishOrPlace || 'obec'}“](${archive.searchUrl})
-- **Specifikum archivu:** ${archive.tips}
-
-#### 2. Kde hledat, pokud zápis v matrice chybí:
-1. **Svatba v rodné obci nevěsty:** Drtivá většina sňatků v českých zemích se konala ve farnosti nevěsty. Pokud znáte jen obec ženicha, hledejte nejprve narození jejich dětí – v zápisech křtů bývá uvedeno přesné rodné příjmení a rodiště matky (nevěsty).
-2. **Rejstříky / Indexy oddaných (Index O):** Hledejte v indexech oddaných s tolerancí ±5 let kolem odhadovaného roku sňatku.
-3. **Policejní přihlášky a sčítání lidu (1869–1921):** V operátech sčítání lidu jsou zapsáni všichni členové domácnosti včetně přesných dat a míst narození.
-4. **Pozemkové a gruntovní knihy:** U rolnických a chalupnických rodů obsahují smlouvy o postoupení gruntu a svatební smlouvy s přesnými příbuzenskými vztahy.`;
-
-      return { success: true, advice: fallbackAdvice, isFallback: true };
+    if (isRateLimitError(aiErr) || isMissingApiKeyError(aiErr)) {
+      const reason = isMissingApiKeyError(aiErr)
+        ? 'Na serveru není nastavený platný GEMINI_API_KEY (Vercel → Settings → Environment Variables → Redeploy). Níže jsou doporučené archivy z interní databáze.'
+        : undefined;
+      return {
+        success: true,
+        advice: buildAdvisorFallback(personName, parishOrPlace, yearRange, reason),
+        isFallback: true,
+      };
     }
     throw aiErr;
   }
 }
 
+function buildAiSearchFallbackResponse(
+  personName: string,
+  maidenName: string,
+  birthYear: string,
+  location: string,
+  eventType: string,
+  notice: string
+) {
+  const archive = determineArchiveByLocation(location);
+  const fallbackText = `### 🏛️ Archivní rešerše pro osobu: **${personName || 'Hledaný předek'}** ${maidenName ? `(roz. ${maidenName})` : ''}
+
+**Hledaná lokalita:** ${location || 'Česká republika'}  
+**Časové období:** okolo roku ${birthYear || 'neuvedeno'}  
+**Hledaná událost:** ${eventType || 'Narození/křest'}  
+
+---
+
+#### 1. Příslušný archiv a farní správa:
+- **Příslušný archivní portál:** [${archive.archiveName}](${archive.webUrl})
+- **Otevřít matriky:** [Přejít do digitální badatelny pro „${location || 'Česká republika'}“](${archive.searchUrl})
+- **Specifikum archivního fondu:** ${archive.tips}
+
+#### 2. Doporučené knihy a postup bádání:
+1. **Rejstříky (Indexy N / O / Z):** Většina digitalizovaných matrik má na začátku, na konci nebo v samostatném svazku abecední index podle příjmení. Prohledejte rejstřík pro roky ${birthYear ? `${Number(birthYear) - 5} až ${Number(birthYear) + 5}` : 'daného období'}.
+2. **Kniha narozených a křtů (N):** Jakmile v indexu naleznete příjmení a folio (číslo strany), otevřete příslušnou knihu křtů.
+3. **Číslo popisné (č.p.):** Zapište si číslo domu. Všechny další děti téže rodiny a úmrtí prarodičů bývají zapsány pod stejným číslem domu.
+4. **Sňatek rodičů:** Svatba se v 95 % případů odehrávala v rodné vsi a farnosti **nevěsty** (matky), obvykle 1 až 4 roky před narozením nejstaršího potomka.
+
+#### 3. Přehled oficiálních digitálních archivů ČR:
+- [eBadatelna SOA v Praze](https://ebadatelna.soapraha.cz) – Střední Čechy (Kladno, Mělník, Slaný, Kolín, Beroun, Benešov...)
+- [ActaPublica (MZA Brno)](https://www.mza.cz/actapublica/matrika/hledani) – Jižní a střední Morava, část Vysočiny
+- [Portafontium (SOA Plzeň)](https://www.portafontium.eu/searching/register) – Západní Čechy (Plzeň, Klatovy, Karlovy Vary, Cheb)
+- [DigiArchiv SOA v Třeboni](https://digi.ceskearchivy.cz) – Jižní Čechy (České Budějovice, Tábor, Krumlov)
+- [ARON Východočeské archivy](https://aron.vychodoceskearchivy.cz) – Hradec Králové, Pardubice, Zámrsk
+- [Digitální badatelna Litoměřice](https://digi.soalitomerice.cz) – Severní Čechy (Ústí, Teplice, Liberec, Louny)
+- [Digitální archiv ZA Opava](https://digi.archives.cz) – Moravskoslezský a Olomoucký kraj
+- [Archiv hl. m. Prahy](https://katalog.ahmp.cz/pragapublica/) – Pražské matriky a policejní přihlášky`;
+
+  const uniqueSources = [
+    { title: archive.archiveName, url: archive.searchUrl },
+    ...(archive.webUrl !== archive.searchUrl ? [{ title: 'Hlavní portál archivu', url: archive.webUrl }] : []),
+    { title: 'eBadatelna SOA Praha', url: 'https://ebadatelna.soapraha.cz' },
+    { title: 'ActaPublica MZA Brno', url: 'https://www.mza.cz/actapublica/matrika/hledani' }
+  ].filter((item, idx, arr) => arr.findIndex(x => x.url === item.url) === idx);
+
+  return {
+    success: true,
+    resultText: fallbackText,
+    sources: uniqueSources,
+    isFallback: true,
+    notice,
+  };
+}
+
 export async function runAiSearch(body: any) {
   const { personName, maidenName, birthYear, location, eventType } = body || {};
+
+  if (!getConfiguredApiKey()) {
+    return buildAiSearchFallbackResponse(
+      personName,
+      maidenName,
+      birthYear,
+      location,
+      eventType,
+      'Na serveru není nastavený GEMINI_API_KEY (Vercel → Settings → Environment Variables → Redeploy). Byly načteny přímé odkazy z interní databáze českých archivů.'
+    );
+  }
+
   const ai = getGeminiClient();
 
   const systemInstruction = `Jsi přední český genealogický rešeršér a archivář specializovaný na online matriky České republiky (eBadatelna SOA Praha, ActaPublica MZA Brno, Portafontium SOA Plzeň, DigiArchiv Třeboň, ARON Zámrsk, Digitální badatelna Litoměřice, Digitální archiv Opava, Archiv hl. m. Prahy a FamilySearch).
@@ -321,7 +435,7 @@ Tvým úkolem je provést pro badatele podrobnou rešerši:
 4. Připrav jasný strukturovaný výstup:
    - Příslušný online archiv a farnost
    - Doporučené signatury a časové rozsahy knih
-   - Přímé odkazy pro badatele
+   - Přímé odkazy pro badatele (používej VÝHRADNĚ funkční oficiální URL: https://ebadatelna.soapraha.cz pro Střední Čechy, https://www.mza.cz/actapublica/matrika/hledani pro Moravu, https://www.portafontium.eu/searching/register pro Západní Čechy, https://digi.ceskearchivy.cz pro Jižní Čechy, https://aron.vychodoceskearchivy.cz pro Východní Čechy, https://digi.soalitomerice.cz pro Severní Čechy, https://digi.archives.cz pro Slezsko/Opavu, https://katalog.ahmp.cz/pragapublica/ pro Prahu — NIKDY nepoužívej zastaralou doménu actapublica.eu ani vymyšlené sub-URL končící 404).
    - Nalezená genealogická data k začlenění do rodokmenu.`;
 
   const prompt = `Proveď rešerši pro osobu v českých matrikách:
@@ -355,6 +469,16 @@ Prohledej online zdroje a uveď konkrétní farnost, archivní portál, signatur
       sources: webSources
     };
   } catch (primaryErr: any) {
+    if (isMissingApiKeyError(primaryErr)) {
+      return buildAiSearchFallbackResponse(
+        personName,
+        maidenName,
+        birthYear,
+        location,
+        eventType,
+        'Na serveru není nastavený platný GEMINI_API_KEY (Vercel → Settings → Environment Variables → Redeploy). Byly načteny přímé odkazy z interní databáze českých archivů.'
+      );
+    }
     if (isRateLimitError(primaryErr)) {
       try {
         const textOnlyResponse = await ai.models.generateContent({
@@ -373,50 +497,14 @@ Prohledej online zdroje a uveď konkrétní farnost, archivní portál, signatur
           ]
         };
       } catch (_secondaryErr: any) {
-        const archive = determineArchiveByLocation(location);
-        const fallbackText = `### 🏛️ Archivní rešerše pro osobu: **${personName || 'Hledaný předek'}** ${maidenName ? `(roz. ${maidenName})` : ''}
-
-**Hledaná lokalita:** ${location || 'Česká republika'}  
-**Časové období:** okolo roku ${birthYear || 'neuvedeno'}  
-**Hledaná událost:** ${eventType || 'Narození/křest'}  
-
----
-
-#### 1. Příslušný archiv a farní správa:
-- **Příslušný archivní portál:** [${archive.archiveName}](${archive.webUrl})
-- **Otevřít matriky:** [Přejít do digitální badatelny pro „${location || 'Česká republika'}“](${archive.searchUrl})
-- **Specifikum archivního fondu:** ${archive.tips}
-
-#### 2. Doporučené knihy a postup bádání:
-1. **Rejstříky (Indexy N / O / Z):** Většina digitalizovaných matrik má na začátku, na konci nebo v samostatném svazku abecední index podle příjmení. Prohledejte rejstřík pro roky ${birthYear ? `${Number(birthYear) - 5} až ${Number(birthYear) + 5}` : 'daného období'}.
-2. **Kniha narozených a křtů (N):** Jakmile v indexu naleznete příjmení a folio (číslo strany), otevřete příslušnou knihu křtů.
-3. **Číslo popisné (č.p.):** Zapište si číslo domu. Všechny další děti téže rodiny a úmrtí prarodičů bývají zapsány pod stejným číslem domu.
-4. **Sňatek rodičů:** Svatba se v 95 % případů odehrávala v rodné vsi a farnosti **nevěsty** (matky), obvykle 1 až 4 roky před narozením nejstaršího potomka.
-
-#### 3. Přehled oficiálních digitálních archivů ČR:
-- [eBadatelna SOA v Praze](https://ebadatelna.soapraha.cz) – Střední Čechy (Kladno, Mělník, Slaný, Kolín, Beroun, Benešov...)
-- [ActaPublica (MZA Brno)](https://www.mza.cz/actapublica/matrika/hledani) – Jižní a střední Morava, část Vysočiny
-- [Portafontium (SOA Plzeň)](https://www.portafontium.eu/searching/register) – Západní Čechy (Plzeň, Klatovy, Karlovy Vary, Cheb)
-- [DigiArchiv SOA v Třeboni](https://digi.ceskearchivy.cz) – Jižní Čechy (České Budějovice, Tábor, Krumlov)
-- [ARON Východočeské archivy](https://aron.vychodoceskearchivy.cz) – Hradec Králové, Pardubice, Zámrsk
-- [Digitální badatelna Litoměřice](https://digi.soalitomerice.cz) – Severní Čechy (Ústí, Teplice, Liberec, Louny)
-- [Digitální archiv ZA Opava](https://digi.archives.cz) – Moravskoslezský a Olomoucký kraj
-- [Archiv hl. m. Prahy](https://katalog.ahmp.cz/pragapublica/) – Pražské matriky a policejní přihlášky`;
-
-        const uniqueSources = [
-          { title: archive.archiveName, url: archive.searchUrl },
-          ...(archive.webUrl !== archive.searchUrl ? [{ title: 'Hlavní portál archivu', url: archive.webUrl }] : []),
-          { title: 'eBadatelna SOA Praha', url: 'https://ebadatelna.soapraha.cz' },
-          { title: 'ActaPublica MZA Brno', url: 'https://www.mza.cz/actapublica/matrika/hledani' }
-        ].filter((item, idx, arr) => arr.findIndex(x => x.url === item.url) === idx);
-
-        return {
-          success: true,
-          resultText: fallbackText,
-          sources: uniqueSources,
-          isFallback: true,
-          notice: 'Rešerše byla sestavena z interní databáze českých archivů a matrik (bezplatná minutová kvóta Gemini API byla dočasně vyčerpána).'
-        };
+        return buildAiSearchFallbackResponse(
+          personName,
+          maidenName,
+          birthYear,
+          location,
+          eventType,
+          'Rešerše byla sestavena z interní databáze českých archivů a matrik (bezplatná minutová kvóta Gemini API byla dočasně vyčerpána).'
+        );
       }
     }
     throw primaryErr;

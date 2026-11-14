@@ -26,16 +26,42 @@ import confetti from 'canvas-confetti';
 
 const STORAGE_KEY = 'rodokmen_matriky_data_v1';
 
+function sanitizeLegacyUrls(data: FamilyTreeData): FamilyTreeData {
+  let changed = false;
+  const updatedPersons: Record<string, Person> = {};
+  for (const [id, person] of Object.entries(data.persons || {})) {
+    let personChanged = false;
+    const citations = (person.parishCitations || []).map(cit => {
+      let url = cit.directUrl || '';
+      if (url.includes('actapublica.eu/matriky/praha/')) {
+        url = 'https://ebadatelna.soapraha.cz';
+      } else if (url.includes('actapublica.eu')) {
+        url = 'https://www.mza.cz/actapublica/matrika/hledani';
+      } else if (url.includes('katalog.ahmp.cz/pragapublica/search') || url.includes('ST_O12_142')) {
+        url = 'https://katalog.ahmp.cz/pragapublica/';
+      }
+      if (url !== (cit.directUrl || '')) {
+        changed = true;
+        personChanged = true;
+        return { ...cit, directUrl: url };
+      }
+      return cit;
+    });
+    updatedPersons[id] = personChanged ? { ...person, parishCitations: citations } : person;
+  }
+  return changed ? { ...data, persons: updatedPersons } : data;
+}
+
 export default function App() {
   // Load tree from URL hash if shared, otherwise from localStorage, or default sample
   const [tree, setTree] = useState<FamilyTreeData>(() => {
     const urlTree = decodeTreeFromUrl();
-    if (urlTree) return urlTree;
+    if (urlTree) return sanitizeLegacyUrls(urlTree);
 
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved) {
       try {
-        return JSON.parse(saved);
+        return sanitizeLegacyUrls(JSON.parse(saved));
       } catch (e) {
         console.error('Error loading saved tree', e);
       }

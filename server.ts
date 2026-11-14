@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import {
   formatGeminiError,
+  getConfiguredApiKey,
   runAnalyzeRecord,
   runAdvisor,
   runAiSearch,
@@ -20,7 +21,7 @@ const PORT = Number(process.env.PORT) || 3000;
 app.use(express.json({ limit: '25mb' }));
 
 app.get('/api/health', (_req, res) => {
-  res.json({ ok: true, hasApiKey: Boolean(process.env.GEMINI_API_KEY) });
+  res.json({ ok: true, hasApiKey: Boolean(getConfiguredApiKey()) });
 });
 
 app.post('/api/archives/analyze-record', async (req, res) => {

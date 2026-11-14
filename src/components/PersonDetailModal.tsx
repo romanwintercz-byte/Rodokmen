@@ -466,7 +466,7 @@ export const PersonDetailModal: React.FC<PersonDetailModalProps> = ({
                       type="text"
                       value={newCitation.directUrl}
                       onChange={e => setNewCitation({ ...newCitation, directUrl: e.target.value })}
-                      placeholder="https://actapublica.eu/..."
+                      placeholder="https://ebadatelna.soapraha.cz/..."
                       className="w-full px-2.5 py-1.5 text-xs bg-stone-50 border border-stone-300 rounded-lg"
                     />
                   </div>

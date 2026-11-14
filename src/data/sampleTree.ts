@@ -33,13 +33,13 @@ export const INITIAL_SAMPLE_TREE: FamilyTreeData = {
       parishCitations: [
         {
           id: 'cit-1',
-          archiveName: 'ActaPublica (SOA Praha)',
+          archiveName: 'eBadatelna (SOA Praha)',
           parish: 'Nelahozeves',
           bookType: 'N',
           signature: 'Nelahozeves 04',
           folio: 'fol. 78, snímek 82',
           timeSpan: '1835–1850',
-          directUrl: 'https://actapublica.eu/matriky/praha/prohlizec/nelahozeves-04',
+          directUrl: 'https://ebadatelna.soapraha.cz',
           originalText: 'Dne 8. Septembris 1841 narozen a 9. křtěn Antonín Leopold. Otec: František Dvořák, řezník a hospodský v Nelahozevsi č. 12, syn Jana Dvořáka rolníka z Třeboradic. Matka: Anna, dcera Josefa Beka šafáře z Nelahozevsi.',
           notes: 'Zápis psán kurentem a částečně česky. Kmotrem byl Antonín Zdeněk, sládek v Nelahozevsi.',
           verified: true,
@@ -53,7 +53,7 @@ export const INITIAL_SAMPLE_TREE: FamilyTreeData = {
           signature: 'ŠT O12',
           folio: 'fol. 142',
           timeSpan: '1870–1880',
-          directUrl: 'http://katalog.ahmp.cz/pragapublica/permalink?xid=ST_O12_142',
+          directUrl: 'https://katalog.ahmp.cz/pragapublica/',
           originalText: 'Sňatek uzavřen 17. listopadu 1873. Ženich: Antonín Dvořák, varhaník a hudební skladatel (32 let). Nevěsta: Anna Čermáková (19 let).',
           verified: true,
           dateAdded: '2025-01-12'
@@ -91,7 +91,7 @@ export const INITIAL_SAMPLE_TREE: FamilyTreeData = {
           signature: 'PE N18',
           folio: 'fol. 204',
           timeSpan: '1850–1860',
-          directUrl: 'http://katalog.ahmp.cz/pragapublica/search?q=Petr+Porici',
+          directUrl: 'https://katalog.ahmp.cz/pragapublica/',
           originalText: 'Narození Anny Čermákové, dcery Jana Čermáka, měšťana a zlatníka na Novém Městě pražském, a Marie roz. Klotzové.',
           verified: true,
           dateAdded: '2025-01-15'
@@ -221,13 +221,13 @@ export const INITIAL_SAMPLE_TREE: FamilyTreeData = {
       parishCitations: [
         {
           id: 'cit-4',
-          archiveName: 'ActaPublica (SOA Praha)',
+          archiveName: 'eBadatelna (SOA Praha)',
           parish: 'Újezdec / Dřínov',
           bookType: 'N',
           signature: 'Újezdec 03',
           folio: 'fol. 34',
           timeSpan: '1805–1820',
-          directUrl: 'https://actapublica.eu/matriky/praha/prohlizec/ujezdec-03',
+          directUrl: 'https://ebadatelna.soapraha.cz',
           originalText: 'Narozen František, otec Jan Dvořák chalupník v Dřínově č. 8, matka Anna roz. Štěpánková ze Slaného.',
           verified: true,
           dateAdded: '2025-01-12'
@@ -256,13 +256,13 @@ export const INITIAL_SAMPLE_TREE: FamilyTreeData = {
       parishCitations: [
         {
           id: 'cit-5',
-          archiveName: 'ActaPublica (SOA Praha)',
+          archiveName: 'eBadatelna (SOA Praha)',
           parish: 'Nelahozeves',
           bookType: 'N',
           signature: 'Nelahozeves 02',
           folio: 'fol. 45',
           timeSpan: '1815–1830',
-          directUrl: 'https://actapublica.eu/matriky/praha/prohlizec/nelahozeves-02',
+          directUrl: 'https://ebadatelna.soapraha.cz',
           originalText: 'Narození Anny Bekové, otec Josef Bek, vrchnostenský šafář na panství Nelahozeves, matka Kateřina roz. Čermáková.',
           verified: true,
           dateAdded: '2025-01-14'
@@ -326,7 +326,7 @@ export const INITIAL_SAMPLE_TREE: FamilyTreeData = {
       parishCitations: [
         {
           id: 'cit-6',
-          archiveName: 'ActaPublica (SOA Praha)',
+          archiveName: 'eBadatelna (SOA Praha)',
           parish: 'Třeboradice (Líbeznice)',
           bookType: 'N',
           signature: 'Líbeznice 01',
