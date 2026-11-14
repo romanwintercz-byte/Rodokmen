@@ -114,6 +114,18 @@ export const AddPersonModal: React.FC<AddPersonModalProps> = ({
     });
   }, [availableExistingPersons, existingSearch]);
 
+  // Detect potential duplicate already in tree while typing in create mode
+  const matchingExistingCandidate = useMemo(() => {
+    if (mode !== 'create' || relationType === 'standalone' || !firstName.trim()) return null;
+    const fn = firstName.trim().toLowerCase();
+    const ln = lastName.trim().toLowerCase();
+    return availableExistingPersons.find(p => {
+      const pFn = p.firstName.trim().toLowerCase();
+      const pLn = p.lastName.trim().toLowerCase();
+      return pFn === fn && (!ln || pLn === ln || (p.maidenName || '').trim().toLowerCase() === ln);
+    }) || null;
+  }, [mode, relationType, firstName, lastName, availableExistingPersons]);
+
   if (!isOpen) return null;
 
   // Handle Form Submit for New Person
@@ -197,12 +209,12 @@ export const AddPersonModal: React.FC<AddPersonModalProps> = ({
               onClick={() => setMode('link')}
               className={`px-4 py-2 text-xs font-semibold rounded-t-xl transition-all border-b-2 flex items-center gap-1.5 ${
                 mode === 'link'
-                  ? 'bg-[#faf8f5] border-amber-800 text-amber-950 shadow-sm'
-                  : 'border-transparent text-stone-500 hover:text-stone-900'
+                  ? 'bg-[#faf8f5] border-emerald-700 text-emerald-950 shadow-sm'
+                  : 'border-transparent text-stone-600 hover:text-stone-900'
               }`}
             >
               <Link2 className="w-3.5 h-3.5 text-emerald-700" />
-              <span>🔗 Vybrat existující osobu ({availableExistingPersons.length})</span>
+              <span>🔗 Propojit existující osobu ({availableExistingPersons.length})</span>
             </button>
           </div>
         )}
@@ -210,6 +222,28 @@ export const AddPersonModal: React.FC<AddPersonModalProps> = ({
         {/* MODE 1: Create New Person Form */}
         {mode === 'create' ? (
           <form onSubmit={handleSubmitNew} className="p-6 space-y-4 overflow-y-auto max-h-[75vh]">
+            {matchingExistingCandidate && (
+              <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-xl flex items-center justify-between gap-3 text-xs">
+                <div className="flex items-start gap-2 text-emerald-950">
+                  <AlertCircle className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+                  <span>
+                    Osoba <strong>{matchingExistingCandidate.firstName} {matchingExistingCandidate.lastName}</strong> už v rodokmenu je. Chcete ji jen propojit bez duplicity?
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setMode('link');
+                    setSelectedExistingId(matchingExistingCandidate.id);
+                    setExistingSearch(matchingExistingCandidate.firstName);
+                  }}
+                  className="px-2.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white font-semibold rounded-lg shrink-0"
+                >
+                  Propojit
+                </button>
+              </div>
+            )}
+
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-semibold text-stone-700 mb-1">Jméno: *</label>

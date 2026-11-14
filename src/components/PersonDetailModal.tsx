@@ -54,12 +54,16 @@ export const PersonDetailModal: React.FC<PersonDetailModalProps> = ({
   const [formData, setFormData] = useState<Person>(() => person ? { ...person } : ({} as Person));
   const [isSavedNotice, setIsSavedNotice] = useState(false);
   const [isConfirmingDelete, setIsConfirmingDelete] = useState(false);
+  const [inlineLinkTarget, setInlineLinkTarget] = useState<'father' | 'mother' | 'spouse' | 'child' | null>(null);
+  const [inlineSelectedId, setInlineSelectedId] = useState<string>('');
 
   // Reset confirmation state and sync formData when person changes
   React.useEffect(() => {
     if (person) {
       setFormData({ ...person });
       setIsConfirmingDelete(false);
+      setInlineLinkTarget(null);
+      setInlineSelectedId('');
     }
   }, [person]);
 
@@ -82,9 +86,49 @@ export const PersonDetailModal: React.FC<PersonDetailModalProps> = ({
   const relationshipToRoot = calculateRelationship(person.id, tree.rootPersonId, tree.persons);
 
   const handleSave = () => {
-    onUpdatePerson(formData);
+    // Preserve latest relational links from prop so profile edits never overwrite freshly linked spouses/parents/children
+    onUpdatePerson({
+      ...formData,
+      fatherId: person.fatherId,
+      motherId: person.motherId,
+      spouseIds: person.spouseIds,
+      childrenIds: person.childrenIds,
+      parishCitations: formData.parishCitations || person.parishCitations
+    });
     setIsSavedNotice(true);
     setTimeout(() => setIsSavedNotice(false), 2000);
+  };
+
+  const getEligibleForInlineLink = (rel: 'father' | 'mother' | 'spouse' | 'child') => {
+    return Object.values(tree.persons)
+      .filter(p => {
+        if (p.id === person.id) return false;
+        if (rel === 'father' || rel === 'mother') {
+          return p.id !== person.fatherId && p.id !== person.motherId;
+        }
+        if (rel === 'spouse') {
+          return !person.spouseIds?.includes(p.id);
+        }
+        if (rel === 'child') {
+          return !person.childrenIds?.includes(p.id);
+        }
+        return true;
+      })
+      .sort((a, b) => {
+        if (rel === 'father' && a.gender !== b.gender) return a.gender === 'M' ? -1 : 1;
+        if (rel === 'mother' && a.gender !== b.gender) return a.gender === 'F' ? -1 : 1;
+        if (rel === 'spouse' && a.gender !== b.gender) {
+          return a.gender !== person.gender ? -1 : 1;
+        }
+        return `${a.lastName} ${a.firstName}`.localeCompare(`${b.lastName} ${b.firstName}`);
+      });
+  };
+
+  const handleConfirmInlineLink = (rel: 'father' | 'mother' | 'spouse' | 'child') => {
+    if (!inlineSelectedId || !onLinkExistingPerson) return;
+    onLinkExistingPerson(rel, person.id, inlineSelectedId);
+    setInlineLinkTarget(null);
+    setInlineSelectedId('');
   };
 
   const handleAddCitation = () => {
@@ -643,17 +687,57 @@ export const PersonDetailModal: React.FC<PersonDetailModalProps> = ({
                         )}
                       </>
                     ) : (
-                      <button
-                        type="button"
-                        onClick={() => onAddRelative('father', person.id)}
-                        className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200/80 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors"
-                      >
-                        <Plus className="w-3.5 h-3.5 text-amber-700" />
-                        <span>Přidat / Propojit otce</span>
-                      </button>
+                      <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                        <button
+                          type="button"
+                          onClick={() => onAddRelative('father', person.id)}
+                          className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200/80 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors"
+                        >
+                          <Plus className="w-3.5 h-3.5 text-amber-700" />
+                          <span>Nový otec</span>
+                        </button>
+                        {onLinkExistingPerson && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setInlineLinkTarget(inlineLinkTarget === 'father' ? null : 'father');
+                              setInlineSelectedId('');
+                            }}
+                            className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-200/80 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors"
+                          >
+                            <Link2 className="w-3.5 h-3.5 text-emerald-700" />
+                            <span>Propojit existujícího</span>
+                          </button>
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>
+
+                {inlineLinkTarget === 'father' && !formData.fatherId && (
+                  <div className="p-2.5 bg-emerald-50/80 border border-emerald-200 rounded-lg flex flex-wrap items-center gap-2">
+                    <select
+                      value={inlineSelectedId}
+                      onChange={e => setInlineSelectedId(e.target.value)}
+                      className="flex-1 min-w-[180px] px-2.5 py-1.5 bg-white text-xs border border-emerald-300 rounded-lg"
+                    >
+                      <option value="">-- Vyberte otce ze stromu --</option>
+                      {getEligibleForInlineLink('father').map(p => (
+                        <option key={p.id} value={p.id}>
+                          {p.firstName} {p.lastName} {p.birthDate ? `(★ ${p.birthDate})` : ''} {p.gender === 'F' ? '[Ž]' : '[M]'}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      disabled={!inlineSelectedId}
+                      onClick={() => handleConfirmInlineLink('father')}
+                      className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold rounded-lg disabled:opacity-40"
+                    >
+                      Propojit jako otce
+                    </button>
+                  </div>
+                )}
 
                 {/* Mother */}
                 <div className="flex items-center justify-between text-xs py-1.5">
@@ -703,34 +787,114 @@ export const PersonDetailModal: React.FC<PersonDetailModalProps> = ({
                         )}
                       </>
                     ) : (
-                      <button
-                        type="button"
-                        onClick={() => onAddRelative('mother', person.id)}
-                        className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200/80 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors"
-                      >
-                        <Plus className="w-3.5 h-3.5 text-amber-700" />
-                        <span>Přidat / Propojit matku</span>
-                      </button>
+                      <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                        <button
+                          type="button"
+                          onClick={() => onAddRelative('mother', person.id)}
+                          className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200/80 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors"
+                        >
+                          <Plus className="w-3.5 h-3.5 text-amber-700" />
+                          <span>Nová matka</span>
+                        </button>
+                        {onLinkExistingPerson && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setInlineLinkTarget(inlineLinkTarget === 'mother' ? null : 'mother');
+                              setInlineSelectedId('');
+                            }}
+                            className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-200/80 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors"
+                          >
+                            <Link2 className="w-3.5 h-3.5 text-emerald-700" />
+                            <span>Propojit existující</span>
+                          </button>
+                        )}
+                      </div>
                     )}
                   </div>
                 </div>
+
+                {inlineLinkTarget === 'mother' && !formData.motherId && (
+                  <div className="p-2.5 bg-emerald-50/80 border border-emerald-200 rounded-lg flex flex-wrap items-center gap-2">
+                    <select
+                      value={inlineSelectedId}
+                      onChange={e => setInlineSelectedId(e.target.value)}
+                      className="flex-1 min-w-[180px] px-2.5 py-1.5 bg-white text-xs border border-emerald-300 rounded-lg"
+                    >
+                      <option value="">-- Vyberte matku ze stromu --</option>
+                      {getEligibleForInlineLink('mother').map(p => (
+                        <option key={p.id} value={p.id}>
+                          {p.firstName} {p.lastName} {p.maidenName ? `(roz. ${p.maidenName})` : ''} {p.birthDate ? `(★ ${p.birthDate})` : ''} {p.gender === 'F' ? '[Ž]' : '[M]'}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      disabled={!inlineSelectedId}
+                      onClick={() => handleConfirmInlineLink('mother')}
+                      className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold rounded-lg disabled:opacity-40"
+                    >
+                      Propojit jako matku
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Spouses Section */}
               <div className="p-4 bg-white border border-stone-200 rounded-xl space-y-3 shadow-xs">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
                   <span className="text-xs font-bold text-stone-800 uppercase tracking-wider">
                     Manžel / Manželka
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => onAddRelative('spouse', person.id)}
-                    className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200/80 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors"
-                  >
-                    <Plus className="w-3.5 h-3.5 text-amber-700" />
-                    <span>Přidat / Propojit manžela/ku</span>
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => onAddRelative('spouse', person.id)}
+                      className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200/80 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors"
+                    >
+                      <Plus className="w-3.5 h-3.5 text-amber-700" />
+                      <span>Nový manžel/ka</span>
+                    </button>
+                    {onLinkExistingPerson && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setInlineLinkTarget(inlineLinkTarget === 'spouse' ? null : 'spouse');
+                          setInlineSelectedId('');
+                        }}
+                        className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-200/80 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors"
+                      >
+                        <Link2 className="w-3.5 h-3.5 text-emerald-700" />
+                        <span>Propojit existující osobu</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
+
+                {inlineLinkTarget === 'spouse' && (
+                  <div className="p-2.5 bg-emerald-50/80 border border-emerald-200 rounded-lg flex flex-wrap items-center gap-2">
+                    <select
+                      value={inlineSelectedId}
+                      onChange={e => setInlineSelectedId(e.target.value)}
+                      className="flex-1 min-w-[180px] px-2.5 py-1.5 bg-white text-xs border border-emerald-300 rounded-lg"
+                    >
+                      <option value="">-- Vyberte manžela / manželku ze stromu --</option>
+                      {getEligibleForInlineLink('spouse').map(p => (
+                        <option key={p.id} value={p.id}>
+                          {p.firstName} {p.lastName} {p.maidenName ? `(roz. ${p.maidenName})` : ''} {p.birthDate ? `(★ ${p.birthDate})` : ''} {p.gender === 'F' ? '[Ž]' : '[M]'}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      disabled={!inlineSelectedId}
+                      onClick={() => handleConfirmInlineLink('spouse')}
+                      className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold rounded-lg disabled:opacity-40"
+                    >
+                      Propojit jako manžele
+                    </button>
+                  </div>
+                )}
 
                 {formData.spouseIds && formData.spouseIds.length > 0 ? (
                   <div className="space-y-1.5 divide-y divide-stone-100">
@@ -786,19 +950,59 @@ export const PersonDetailModal: React.FC<PersonDetailModalProps> = ({
 
               {/* Children Section */}
               <div className="p-4 bg-white border border-stone-200 rounded-xl space-y-3 shadow-xs">
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
                   <span className="text-xs font-bold text-stone-800 uppercase tracking-wider">
                     Děti / Potomci
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => onAddRelative('child', person.id)}
-                    className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200/80 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors"
-                  >
-                    <Plus className="w-3.5 h-3.5 text-amber-700" />
-                    <span>Přidat / Propojit dítě</span>
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => onAddRelative('child', person.id)}
+                      className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200/80 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors"
+                    >
+                      <Plus className="w-3.5 h-3.5 text-amber-700" />
+                      <span>Nové dítě</span>
+                    </button>
+                    {onLinkExistingPerson && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setInlineLinkTarget(inlineLinkTarget === 'child' ? null : 'child');
+                          setInlineSelectedId('');
+                        }}
+                        className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-200/80 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors"
+                      >
+                        <Link2 className="w-3.5 h-3.5 text-emerald-700" />
+                        <span>Propojit existující</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
+
+                {inlineLinkTarget === 'child' && (
+                  <div className="p-2.5 bg-emerald-50/80 border border-emerald-200 rounded-lg flex flex-wrap items-center gap-2">
+                    <select
+                      value={inlineSelectedId}
+                      onChange={e => setInlineSelectedId(e.target.value)}
+                      className="flex-1 min-w-[180px] px-2.5 py-1.5 bg-white text-xs border border-emerald-300 rounded-lg"
+                    >
+                      <option value="">-- Vyberte dítě ze stromu --</option>
+                      {getEligibleForInlineLink('child').map(p => (
+                        <option key={p.id} value={p.id}>
+                          {p.firstName} {p.lastName} {p.maidenName ? `(roz. ${p.maidenName})` : ''} {p.birthDate ? `(★ ${p.birthDate})` : ''} {p.gender === 'F' ? '[Ž]' : '[M]'}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      disabled={!inlineSelectedId}
+                      onClick={() => handleConfirmInlineLink('child')}
+                      className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold rounded-lg disabled:opacity-40"
+                    >
+                      Propojit jako dítě
+                    </button>
+                  </div>
+                )}
 
                 {formData.childrenIds && formData.childrenIds.length > 0 ? (
                   <div className="space-y-1.5 divide-y divide-stone-100">

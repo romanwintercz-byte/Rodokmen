@@ -119,48 +119,55 @@ export const FamilyTreeCanvas: React.FC<FamilyTreeCanvasProps> = ({
     });
   };
 
-  // Compute ancestral generation depths relative to root person
+  // Compute ancestral generation depths relative to root person (and any disconnected components)
   const personGenerations = useMemo(() => {
     const generations: Record<string, number> = {};
-    const rootId = tree.rootPersonId;
-
-    // Traverse upwards (ancestors)
-    const queue: { id: string; gen: number }[] = [{ id: rootId, gen: 0 }];
     const visited = new Set<string>();
 
-    while (queue.length > 0) {
-      const { id, gen } = queue.shift()!;
-      if (visited.has(id)) continue;
-      visited.add(id);
-      generations[id] = gen;
+    const bfsFromSeed = (seedId: string) => {
+      if (!tree.persons[seedId] || visited.has(seedId)) return;
+      const queue: { id: string; gen: number }[] = [{ id: seedId, gen: 0 }];
 
-      const p = tree.persons[id];
-      if (!p) continue;
+      while (queue.length > 0) {
+        const { id, gen } = queue.shift()!;
+        if (visited.has(id)) continue;
+        visited.add(id);
+        generations[id] = gen;
 
-      // Parents are gen + 1
-      if (p.fatherId && !visited.has(p.fatherId)) {
-        queue.push({ id: p.fatherId, gen: gen + 1 });
-      }
-      if (p.motherId && !visited.has(p.motherId)) {
-        queue.push({ id: p.motherId, gen: gen + 1 });
-      }
-      // Children are gen - 1
-      p.childrenIds.forEach(cId => {
-        if (!visited.has(cId)) {
-          queue.push({ id: cId, gen: gen - 1 });
+        const p = tree.persons[id];
+        if (!p) continue;
+
+        // Parents are gen + 1
+        if (p.fatherId && !visited.has(p.fatherId)) {
+          queue.push({ id: p.fatherId, gen: gen + 1 });
         }
-      });
-      // Spouses share same generation
-      p.spouseIds.forEach(spId => {
-        if (!visited.has(spId)) {
-          queue.push({ id: spId, gen: gen });
+        if (p.motherId && !visited.has(p.motherId)) {
+          queue.push({ id: p.motherId, gen: gen + 1 });
         }
-      });
+        // Children are gen - 1
+        (p.childrenIds || []).forEach(cId => {
+          if (!visited.has(cId)) {
+            queue.push({ id: cId, gen: gen - 1 });
+          }
+        });
+        // Spouses share same generation
+        (p.spouseIds || []).forEach(spId => {
+          if (!visited.has(spId)) {
+            queue.push({ id: spId, gen: gen });
+          }
+        });
+      }
+    };
+
+    if (tree.rootPersonId) {
+      bfsFromSeed(tree.rootPersonId);
     }
 
-    // Default for any unlinked persons
+    // Traverse any disconnected subtrees (e.g. standalone branches added via "+ Nová osoba")
     Object.keys(tree.persons).forEach(id => {
-      if (generations[id] === undefined) generations[id] = 0;
+      if (!visited.has(id)) {
+        bfsFromSeed(id);
+      }
     });
 
     return generations;
@@ -188,10 +195,29 @@ export const FamilyTreeCanvas: React.FC<FamilyTreeCanvasProps> = ({
 
     genKeys.forEach(gen => {
       const group = byGen[gen];
-      const totalWidth = group.length * cardWidth + (group.length - 1) * cardSpacingX;
+      // Cluster spouses side-by-side so horizontal marriage connectors never pass behind unrelated cards
+      const orderedGroup: Person[] = [];
+      const placedInGen = new Set<string>();
+      const groupById = new Map(group.map(p => [p.id, p]));
+
+      group.forEach(p => {
+        if (placedInGen.has(p.id)) return;
+        orderedGroup.push(p);
+        placedInGen.add(p.id);
+
+        (p.spouseIds || []).forEach(spId => {
+          const sp = groupById.get(spId);
+          if (sp && !placedInGen.has(spId)) {
+            orderedGroup.push(sp);
+            placedInGen.add(spId);
+          }
+        });
+      });
+
+      const totalWidth = orderedGroup.length * cardWidth + (orderedGroup.length - 1) * cardSpacingX;
       let startX = -totalWidth / 2;
 
-      group.forEach((p, idx) => {
+      orderedGroup.forEach((p, idx) => {
         nodePositions[p.id] = {
           x: startX + idx * (cardWidth + cardSpacingX),
           y: currentY,
@@ -558,26 +584,111 @@ export const FamilyTreeCanvas: React.FC<FamilyTreeCanvasProps> = ({
                   }
                 }
 
-                // Spouse connection
-                p.spouseIds.forEach(spId => {
+                // Spouse connection (render once per pair using canonical ID order)
+                (p.spouseIds || []).forEach(spId => {
+                  if (p.id >= spId) return;
                   const spousePos = (viewMode === 'pedigree' ? pedigreeLayout : nodesLayout)[spId];
-                  if (spousePos && spousePos.x > childPos.x) {
-                    const sX = childPos.x + 270;
-                    const sY = childPos.y + 45;
-                    const eX = spousePos.x;
-                    const eY = spousePos.y + 45;
+                  if (!spousePos) return;
+
+                  if (viewMode === 'pedigree' && spousePos.x === childPos.x) {
+                    const topPos = childPos.y < spousePos.y ? childPos : spousePos;
+                    const botPos = childPos.y < spousePos.y ? spousePos : childPos;
+                    const bracketX = topPos.x - 16;
+                    const sY = topPos.y + 60;
+                    const eY = botPos.y + 60;
+                    const midY = (sY + eY) / 2;
+
                     lines.push(
-                      <line
-                        key={`spouse-${p.id}-${spId}`}
-                        x1={sX}
-                        y1={sY}
-                        x2={eX}
-                        y2={eY}
-                        stroke="#b45309"
-                        strokeWidth="2.5"
-                        strokeDasharray="3 3"
-                        className="opacity-80"
-                      />
+                      <g key={`spouse-${p.id}-${spId}`}>
+                        <path
+                          d={`M ${topPos.x} ${sY} L ${bracketX} ${sY} L ${bracketX} ${eY} L ${botPos.x} ${eY}`}
+                          fill="none"
+                          stroke="#b45309"
+                          strokeWidth="2.5"
+                          strokeDasharray="4 3"
+                          className="opacity-85"
+                        />
+                        <circle cx={bracketX} cy={midY} r="10" fill="#fef3c7" stroke="#b45309" strokeWidth="1.5" />
+                        <text
+                          x={bracketX}
+                          y={midY + 3.5}
+                          textAnchor="middle"
+                          fontSize="11"
+                          fontWeight="bold"
+                          fill="#92400e"
+                        >
+                          ⚭
+                        </text>
+                      </g>
+                    );
+                    return;
+                  }
+
+                  const leftPos = childPos.x <= spousePos.x ? childPos : spousePos;
+                  const rightPos = childPos.x <= spousePos.x ? spousePos : childPos;
+                  const isSameRow = Math.abs(leftPos.y - rightPos.y) < 5;
+                  const gapX = rightPos.x - (leftPos.x + 270);
+
+                  if (isSameRow && gapX >= -10 && gapX <= 75) {
+                    const sX = leftPos.x + 270;
+                    const sY = leftPos.y + 52;
+                    const eX = rightPos.x;
+                    const eY = rightPos.y + 52;
+                    const midX = (sX + eX) / 2;
+                    lines.push(
+                      <g key={`spouse-${p.id}-${spId}`}>
+                        <line
+                          x1={sX}
+                          y1={sY}
+                          x2={eX}
+                          y2={eY}
+                          stroke="#b45309"
+                          strokeWidth="2.5"
+                          strokeDasharray="4 3"
+                          className="opacity-85"
+                        />
+                        <circle cx={midX} cy={sY} r="10" fill="#fef3c7" stroke="#b45309" strokeWidth="1.5" />
+                        <text
+                          x={midX}
+                          y={sY + 3.5}
+                          textAnchor="middle"
+                          fontSize="11"
+                          fontWeight="bold"
+                          fill="#92400e"
+                        >
+                          ⚭
+                        </text>
+                      </g>
+                    );
+                  } else {
+                    const sX = leftPos.x + 135;
+                    const sY = leftPos.y;
+                    const eX = rightPos.x + 135;
+                    const eY = rightPos.y;
+                    const archY = Math.min(sY, eY) - 28;
+                    const midX = (sX + eX) / 2;
+                    lines.push(
+                      <g key={`spouse-${p.id}-${spId}`}>
+                        <path
+                          d={`M ${sX} ${sY} C ${sX} ${archY}, ${eX} ${archY}, ${eX} ${eY}`}
+                          fill="none"
+                          stroke="#b45309"
+                          strokeWidth="2.5"
+                          strokeDasharray="4 3"
+                          className="opacity-85"
+                        />
+                        <circle cx={midX} cy={archY + 7} r="10" fill="#fef3c7" stroke="#b45309" strokeWidth="1.5" />
+                        <text
+                          x={midX}
+                          y={archY + 10.5}
+                          textAnchor="middle"
+                          fontSize="11"
+                          fontWeight="bold"
+                          fill="#92400e"
+                        >
+                          ⚭
+                        </text>
+                      </g>
                     );
                   }
                 });
@@ -705,6 +816,20 @@ export const FamilyTreeCanvas: React.FC<FamilyTreeCanvasProps> = ({
                               </div>
                             )}
                           </>
+                        )}
+
+                        {/* Spouse summary */}
+                        {person.spouseIds && person.spouseIds.length > 0 && (
+                          <div className="flex items-center justify-between pt-0.5 text-[10px]">
+                            <span className="text-amber-700 font-semibold shrink-0">⚭ Manžel/ka:</span>
+                            <span className="font-medium text-amber-950 truncate ml-1">
+                              {person.spouseIds
+                                .map(id => tree.persons[id])
+                                .filter(Boolean)
+                                .map(sp => `${sp.firstName} ${sp.lastName}`)
+                                .join(', ')}
+                            </span>
+                          </div>
                         )}
                       </div>
                     </div>
