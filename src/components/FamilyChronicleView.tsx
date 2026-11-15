@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { FamilyTreeData, Person } from '../types/genealogy';
 import { 
   ArrowLeft, 
@@ -9,20 +9,27 @@ import {
   MapPin, 
   Briefcase, 
   ExternalLink,
-  Crown
+  Crown,
+  Pencil,
+  Check,
+  X
 } from 'lucide-react';
 
 interface FamilyChronicleViewProps {
   tree: FamilyTreeData;
   onBackToGraph: () => void;
   onSelectPerson: (personId: string) => void;
+  onRenameTree?: (newName: string) => void;
 }
 
 export const FamilyChronicleView: React.FC<FamilyChronicleViewProps> = ({
   tree,
   onBackToGraph,
-  onSelectPerson
+  onSelectPerson,
+  onRenameTree
 }) => {
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState(tree.treeName);
   const personsList = Object.values(tree.persons);
   const rootPerson = tree.persons[tree.rootPersonId];
 
@@ -68,9 +75,68 @@ export const FamilyChronicleView: React.FC<FamilyChronicleViewProps> = ({
           <span className="text-xs tracking-[0.25em] font-sans font-bold text-amber-900 uppercase">
             Pamětní rodová kronika
           </span>
-          <h1 className="font-serif-title font-bold text-3xl md:text-4xl text-stone-950 mt-2 mb-3">
-            {tree.treeName}
-          </h1>
+          {isEditingName && onRenameTree ? (
+            <form
+              onSubmit={e => {
+                e.preventDefault();
+                const trimmed = nameDraft.trim();
+                if (trimmed) onRenameTree(trimmed);
+                setIsEditingName(false);
+              }}
+              className="flex items-center justify-center gap-2 mt-2 mb-3 print:hidden"
+            >
+              <input
+                type="text"
+                autoFocus
+                value={nameDraft}
+                onChange={e => setNameDraft(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Escape') {
+                    setNameDraft(tree.treeName);
+                    setIsEditingName(false);
+                  }
+                }}
+                className="font-serif-title font-bold text-2xl md:text-3xl text-stone-950 bg-white border border-amber-500 rounded-xl px-3 py-1.5 text-center w-full max-w-lg focus:outline-none focus:ring-2 focus:ring-amber-600/30"
+              />
+              <button
+                type="submit"
+                title="Uložit název"
+                className="p-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl transition-colors"
+              >
+                <Check className="w-4 h-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setNameDraft(tree.treeName);
+                  setIsEditingName(false);
+                }}
+                title="Zrušit"
+                className="p-2 bg-stone-200 hover:bg-stone-300 text-stone-700 rounded-xl transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </form>
+          ) : (
+            <div className="flex items-center justify-center gap-2 mt-2 mb-3">
+              <h1 className="font-serif-title font-bold text-3xl md:text-4xl text-stone-950">
+                {tree.treeName}
+              </h1>
+              {onRenameTree && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNameDraft(tree.treeName);
+                    setIsEditingName(true);
+                  }}
+                  title="Upravit název rodokmenu"
+                  className="p-1.5 text-stone-400 hover:text-amber-800 hover:bg-amber-100/70 rounded-lg transition-colors print:hidden"
+                >
+                  <Pencil className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          )}
           <p className="font-sans text-xs text-stone-600 max-w-xl mx-auto italic">
             {tree.description}
           </p>

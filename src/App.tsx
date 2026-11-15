@@ -20,7 +20,10 @@ import {
   Sparkles,
   TreePine,
   CheckCircle2,
-  Users
+  Users,
+  Pencil,
+  Check,
+  X
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
@@ -84,6 +87,10 @@ export default function App() {
   // Quick Add Context
   const [addRelationType, setAddRelationType] = useState<'father' | 'mother' | 'spouse' | 'child' | 'standalone'>('standalone');
   const [addTargetPersonId, setAddTargetPersonId] = useState<string | undefined>(undefined);
+
+  // Editable tree title
+  const [isEditingTreeName, setIsEditingTreeName] = useState(false);
+  const [treeNameDraft, setTreeNameDraft] = useState(tree.treeName);
 
   // Notification toast
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -612,9 +619,35 @@ export default function App() {
     showToast('Data z matriky byla úspěšně přepsána a vložena do rodokmenu!');
   };
 
+  const handleRenameTree = (newName: string) => {
+    const trimmed = newName.trim();
+    if (!trimmed) return;
+    if (trimmed !== tree.treeName) {
+      setTree(prev => ({
+        ...prev,
+        treeName: trimmed,
+        lastModified: new Date().toISOString()
+      }));
+      setTreeNameDraft(trimmed);
+      showToast(`Název rodokmenu změněn na „${trimmed}“.`);
+    }
+  };
+
+  const handleSaveTreeName = () => {
+    const trimmed = treeNameDraft.trim();
+    if (!trimmed) {
+      setTreeNameDraft(tree.treeName);
+      setIsEditingTreeName(false);
+      return;
+    }
+    handleRenameTree(trimmed);
+    setIsEditingTreeName(false);
+  };
+
   // Reset to original authentic sample tree
   const handleResetToSample = () => {
     setTree(INITIAL_SAMPLE_TREE);
+    setTreeNameDraft(INITIAL_SAMPLE_TREE.treeName);
     setSelectedPersonId(INITIAL_SAMPLE_TREE.rootPersonId);
     setIsConfirmingReset(false);
     showToast('Ukázkový rodokmen byl obnoven.');
@@ -626,6 +659,7 @@ export default function App() {
       <FamilyChronicleView
         tree={tree}
         onBackToGraph={() => setIsChronicleViewOpen(false)}
+        onRenameTree={handleRenameTree}
         onSelectPerson={id => {
           setSelectedPersonId(id);
           setIsChronicleViewOpen(false);
@@ -655,9 +689,67 @@ export default function App() {
                 GEDCOM 5.5.1
               </span>
             </div>
-            <p className="text-xs text-stone-300 truncate max-w-sm">
-              {tree.treeName} • <span className="text-amber-200/90">{Object.keys(tree.persons).length} osob</span>
-            </p>
+            {isEditingTreeName ? (
+              <form
+                onSubmit={e => {
+                  e.preventDefault();
+                  handleSaveTreeName();
+                }}
+                className="flex items-center gap-1 mt-0.5"
+              >
+                <input
+                  type="text"
+                  autoFocus
+                  value={treeNameDraft}
+                  onChange={e => setTreeNameDraft(e.target.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Escape') {
+                      setTreeNameDraft(tree.treeName);
+                      setIsEditingTreeName(false);
+                    }
+                  }}
+                  placeholder="Název rodokmenu..."
+                  className="px-2 py-0.5 text-xs bg-stone-800 text-amber-100 border border-amber-500/60 rounded-md focus:outline-none focus:ring-2 focus:ring-amber-400/50 w-48 sm:w-64"
+                />
+                <button
+                  type="submit"
+                  title="Uložit název"
+                  className="p-1 bg-emerald-700 hover:bg-emerald-600 text-white rounded-md transition-colors"
+                >
+                  <Check className="w-3 h-3" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTreeNameDraft(tree.treeName);
+                    setIsEditingTreeName(false);
+                  }}
+                  title="Zrušit"
+                  className="p-1 bg-stone-700 hover:bg-stone-600 text-stone-200 rounded-md transition-colors"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </form>
+            ) : (
+              <div className="flex items-center gap-1.5 text-xs text-stone-300">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTreeNameDraft(tree.treeName);
+                    setIsEditingTreeName(true);
+                  }}
+                  title="Kliknutím upravíte název rodokmenu"
+                  className="group inline-flex items-center gap-1.5 hover:text-amber-200 transition-colors text-left max-w-[220px] sm:max-w-xs"
+                >
+                  <span className="truncate underline decoration-stone-500/50 decoration-dashed underline-offset-4 group-hover:decoration-amber-400">
+                    {tree.treeName}
+                  </span>
+                  <Pencil className="w-3 h-3 text-stone-400 group-hover:text-amber-300 shrink-0" />
+                </button>
+                <span className="text-stone-500">•</span>
+                <span className="text-amber-200/90 shrink-0">{Object.keys(tree.persons).length} osob</span>
+              </div>
+            )}
           </div>
         </div>
 
