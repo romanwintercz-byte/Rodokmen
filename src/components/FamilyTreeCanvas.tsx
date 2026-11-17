@@ -1,23 +1,28 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { Person, FamilyTreeData } from '../types/genealogy';
-import { 
-  ZoomIn, 
-  ZoomOut, 
-  Maximize2, 
-  Plus, 
-  BookOpen, 
-  User, 
-  UserCheck, 
-  Calendar, 
-  MapPin, 
-  Briefcase, 
+import {
+  CARD_W,
+  CARD_H,
+  SPOUSE_GAP,
+  ROW_STEP_Y,
+  computeMyHeritageLayout,
+  NodePosition,
+} from '../utils/treeLayout';
+import {
+  ZoomIn,
+  ZoomOut,
+  Maximize2,
+  Plus,
+  BookOpen,
+  User,
+  Calendar,
   Sparkles,
   Layers,
   CircleDot,
   Compass,
   Search,
-  Filter,
-  Trash2
+  Trash2,
+  Crosshair,
 } from 'lucide-react';
 
 interface FamilyTreeCanvasProps {
@@ -31,6 +36,27 @@ interface FamilyTreeCanvasProps {
   onViewModeChange: (mode: 'generations' | 'pedigree' | 'fan' | 'timeline') => void;
 }
 
+function extractYear(dateStr?: string): string {
+  if (!dateStr) return '';
+  const match = dateStr.match(/\b(1[0-9]{3}|20[0-9]{2})\b/);
+  return match ? match[1] : dateStr.trim();
+}
+
+function formatLifespan(person: Person): string {
+  const b = extractYear(person.birthDate);
+  const d = extractYear(person.deathDate);
+  if (b && d) return `${b} – ${d}`;
+  if (b && person.isDeceased) return `${b} – †`;
+  if (b) return `★ ${b}`;
+  if (d) return `† ${d}`;
+  return person.isDeceased ? 'zemřel(a)' : 'datum neuvedeno';
+}
+
+function formatShortPlace(place?: string): string {
+  if (!place) return '';
+  return place.replace(/\s*č\.p\.\s*\d+.*$/i, '').trim();
+}
+
 export const FamilyTreeCanvas: React.FC<FamilyTreeCanvasProps> = ({
   tree,
   selectedPersonId,
@@ -39,7 +65,7 @@ export const FamilyTreeCanvas: React.FC<FamilyTreeCanvasProps> = ({
   onDeletePerson,
   onOpenParishAssistant,
   viewMode,
-  onViewModeChange
+  onViewModeChange,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const [zoom, setZoom] = useState(1);
@@ -48,6 +74,7 @@ export const FamilyTreeCanvas: React.FC<FamilyTreeCanvasProps> = ({
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [searchQuery, setSearchQuery] = useState('');
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
+  const [brokenAvatarIds, setBrokenAvatarIds] = useState<Record<string, boolean>>({});
 
   // Zoom handlers (centered on viewport center)
   const handleZoomIn = () => {
@@ -58,7 +85,7 @@ export const FamilyTreeCanvas: React.FC<FamilyTreeCanvasProps> = ({
         const cy = containerRef.current.clientHeight / 2;
         setPan(p => ({
           x: cx - (cx - p.x) * (next / prev),
-          y: cy - (cy - p.y) * (next / prev)
+          y: cy - (cy - p.y) * (next / prev),
         }));
       }
       return next;
@@ -73,7 +100,7 @@ export const FamilyTreeCanvas: React.FC<FamilyTreeCanvasProps> = ({
         const cy = containerRef.current.clientHeight / 2;
         setPan(p => ({
           x: cx - (cx - p.x) * (next / prev),
-          y: cy - (cy - p.y) * (next / prev)
+          y: cy - (cy - p.y) * (next / prev),
         }));
       }
       return next;
@@ -82,8 +109,7 @@ export const FamilyTreeCanvas: React.FC<FamilyTreeCanvasProps> = ({
 
   // Mouse drag panning
   const handleMouseDown = (e: React.MouseEvent) => {
-    // Only drag if clicking the background canvas
-    if ((e.target as HTMLElement).closest('.person-node-card')) return;
+    if ((e.target as HTMLElement).closest('.person-node-card, .ghost-node-card')) return;
     setIsDragging(true);
     setDragStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
   };
@@ -92,7 +118,7 @@ export const FamilyTreeCanvas: React.FC<FamilyTreeCanvasProps> = ({
     if (!isDragging) return;
     setPan({
       x: e.clientX - dragStart.x,
-      y: e.clientY - dragStart.y
+      y: e.clientY - dragStart.y,
     });
   };
 
@@ -102,151 +128,47 @@ export const FamilyTreeCanvas: React.FC<FamilyTreeCanvasProps> = ({
 
   // Wheel zoom (centered around mouse pointer)
   const handleWheel = (e: React.WheelEvent) => {
+    if (viewMode === 'timeline') return;
     e.preventDefault();
     const zoomFactor = e.deltaY < 0 ? 1.08 : 0.92;
     setZoom(prev => {
-      const next = Math.max(0.35, Math.min(2.5, prev * zoomFactor));
+      const next = Math.max(0.3, Math.min(2.4, prev * zoomFactor));
       if (containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect();
         const mouseX = e.clientX - rect.left;
         const mouseY = e.clientY - rect.top;
         setPan(p => ({
           x: mouseX - (mouseX - p.x) * (next / prev),
-          y: mouseY - (mouseY - p.y) * (next / prev)
+          y: mouseY - (mouseY - p.y) * (next / prev),
         }));
       }
       return next;
     });
   };
 
-  // Compute ancestral generation depths relative to root person (and any disconnected components)
-  const personGenerations = useMemo(() => {
-    const generations: Record<string, number> = {};
-    const visited = new Set<string>();
+  // MyHeritage-style couple-centered hierarchical layout
+  const { positions: nodesLayout, busGroups, spouseBridges } = useMemo(
+    () => computeMyHeritageLayout(tree),
+    [tree]
+  );
 
-    const bfsFromSeed = (seedId: string) => {
-      if (!tree.persons[seedId] || visited.has(seedId)) return;
-      const queue: { id: string; gen: number }[] = [{ id: seedId, gen: 0 }];
-
-      while (queue.length > 0) {
-        const { id, gen } = queue.shift()!;
-        if (visited.has(id)) continue;
-        visited.add(id);
-        generations[id] = gen;
-
-        const p = tree.persons[id];
-        if (!p) continue;
-
-        // Parents are gen + 1
-        if (p.fatherId && !visited.has(p.fatherId)) {
-          queue.push({ id: p.fatherId, gen: gen + 1 });
-        }
-        if (p.motherId && !visited.has(p.motherId)) {
-          queue.push({ id: p.motherId, gen: gen + 1 });
-        }
-        // Children are gen - 1
-        (p.childrenIds || []).forEach(cId => {
-          if (!visited.has(cId)) {
-            queue.push({ id: cId, gen: gen - 1 });
-          }
-        });
-        // Spouses share same generation
-        (p.spouseIds || []).forEach(spId => {
-          if (!visited.has(spId)) {
-            queue.push({ id: spId, gen: gen });
-          }
-        });
-      }
-    };
-
-    if (tree.rootPersonId) {
-      bfsFromSeed(tree.rootPersonId);
-    }
-
-    // Traverse any disconnected subtrees (e.g. standalone branches added via "+ Nová osoba")
-    Object.keys(tree.persons).forEach(id => {
-      if (!visited.has(id)) {
-        bfsFromSeed(id);
-      }
-    });
-
-    return generations;
-  }, [tree]);
-
-  // Hierarchical node layout calculation for generation view
-  const nodesLayout = useMemo(() => {
-    const persons = Object.values(tree.persons);
-    // Group by generation
-    const byGen: Record<number, Person[]> = {};
-    persons.forEach(p => {
-      const gen = personGenerations[p.id] ?? 0;
-      if (!byGen[gen]) byGen[gen] = [];
-      byGen[gen].push(p);
-    });
-
-    const genKeys = Object.keys(byGen).map(Number).sort((a, b) => b - a); // Higher generations on top
-
-    const nodePositions: Record<string, { x: number; y: number; gen: number }> = {};
-    const cardWidth = 270;
-    const cardSpacingX = 50;
-    const genSpacingY = 220;
-
-    let currentY = 80;
-
-    genKeys.forEach(gen => {
-      const group = byGen[gen];
-      // Cluster spouses side-by-side so horizontal marriage connectors never pass behind unrelated cards
-      const orderedGroup: Person[] = [];
-      const placedInGen = new Set<string>();
-      const groupById = new Map(group.map(p => [p.id, p]));
-
-      group.forEach(p => {
-        if (placedInGen.has(p.id)) return;
-        orderedGroup.push(p);
-        placedInGen.add(p.id);
-
-        (p.spouseIds || []).forEach(spId => {
-          const sp = groupById.get(spId);
-          if (sp && !placedInGen.has(spId)) {
-            orderedGroup.push(sp);
-            placedInGen.add(spId);
-          }
-        });
-      });
-
-      const totalWidth = orderedGroup.length * cardWidth + (orderedGroup.length - 1) * cardSpacingX;
-      let startX = -totalWidth / 2;
-
-      orderedGroup.forEach((p, idx) => {
-        nodePositions[p.id] = {
-          x: startX + idx * (cardWidth + cardSpacingX),
-          y: currentY,
-          gen
-        };
-      });
-
-      currentY += genSpacingY;
-    });
-
-    return nodePositions;
-  }, [tree, personGenerations]);
-
-  // Pedigree Layout (Ahnentafel tree up to 4 generations)
+  // Pedigree Layout (Ahnentafel horizontal brackets, zero vertical overlaps up to 4 generations)
   const pedigreeLayout = useMemo(() => {
-    if (viewMode !== 'pedigree') return {};
+    if (viewMode !== 'pedigree') return {} as Record<string, NodePosition>;
     const rootId = selectedPersonId || tree.rootPersonId;
-    const pos: Record<string, { x: number; y: number; gen: number }> = {};
+    const pos: Record<string, NodePosition> = {};
+    const totalCanvasH = 8 * (CARD_H + 22); // 1008px accommodates all 8 gen-3 cards with 22px gap
 
     function placeAncestors(id: string | undefined, gen: number, yIndex: number, totalSlots: number) {
       if (!id || gen > 3) return;
       const person = tree.persons[id];
       if (!person) return;
 
-      const x = gen * 320;
-      const slotHeight = 600 / totalSlots;
-      const y = (yIndex + 0.5) * slotHeight - 300;
+      const x = gen * (CARD_W + 76);
+      const slotHeight = totalCanvasH / totalSlots;
+      const y = (yIndex + 0.5) * slotHeight - CARD_H / 2 - totalCanvasH / 2;
 
-      pos[id] = { x, y, gen };
+      pos[id] = { x, y, gen, componentIndex: 0 };
 
       if (person.fatherId) {
         placeAncestors(person.fatherId, gen + 1, yIndex * 2, totalSlots * 2);
@@ -260,15 +182,14 @@ export const FamilyTreeCanvas: React.FC<FamilyTreeCanvasProps> = ({
     return pos;
   }, [tree, selectedPersonId, viewMode]);
 
+  const activeLayout = viewMode === 'pedigree' ? pedigreeLayout : nodesLayout;
+
   // Bounding box of currently rendered tree
   const treeBounds = useMemo(() => {
-    const currentLayout = viewMode === 'pedigree' ? pedigreeLayout : nodesLayout;
-    const positions = Object.values(currentLayout);
+    const positions = Object.values(activeLayout);
     if (positions.length === 0) {
-      return { minX: 0, maxX: 300, minY: 0, maxY: 300, width: 300, height: 300 };
+      return { minX: 0, maxX: CARD_W, minY: 0, maxY: CARD_H, width: CARD_W, height: CARD_H };
     }
-    const cardW = 270;
-    const cardH = 200;
     let minX = Infinity;
     let maxX = -Infinity;
     let minY = Infinity;
@@ -276,9 +197,9 @@ export const FamilyTreeCanvas: React.FC<FamilyTreeCanvasProps> = ({
 
     positions.forEach(pos => {
       if (pos.x < minX) minX = pos.x;
-      if (pos.x + cardW > maxX) maxX = pos.x + cardW;
+      if (pos.x + CARD_W > maxX) maxX = pos.x + CARD_W;
       if (pos.y < minY) minY = pos.y;
-      if (pos.y + cardH > maxY) maxY = pos.y + cardH;
+      if (pos.y + CARD_H > maxY) maxY = pos.y + CARD_H;
     });
 
     return {
@@ -286,58 +207,66 @@ export const FamilyTreeCanvas: React.FC<FamilyTreeCanvasProps> = ({
       maxX,
       minY,
       maxY,
-      width: Math.max(cardW, maxX - minX),
-      height: Math.max(cardH, maxY - minY)
+      width: Math.max(CARD_W, maxX - minX),
+      height: Math.max(CARD_H, maxY - minY),
     };
-  }, [viewMode, pedigreeLayout, nodesLayout]);
+  }, [activeLayout]);
 
-  // Center & Fit tree to visible screen so no cards are off-screen
+  // Center & Fit tree to visible screen
   const fitToScreen = useCallback(() => {
     if (!containerRef.current) return;
     const container = containerRef.current;
     const viewportW = container.clientWidth || window.innerWidth;
-    const viewportH = container.clientHeight || (window.innerHeight - 64);
+    const viewportH = container.clientHeight || window.innerHeight - 64;
 
     const { minX, minY, width: treeW, height: treeH } = treeBounds;
 
-    // Margins: leave clear room for top toolbar (100px), bottom legend (80px), sides (60px)
-    const paddingX = 60;
-    const paddingTop = 100;
-    const paddingBottom = 80;
+    const paddingX = 64;
+    const paddingTop = 96;
+    const paddingBottom = 88;
 
-    const availableW = Math.max(200, viewportW - paddingX * 2);
-    const availableH = Math.max(200, viewportH - paddingTop - paddingBottom);
+    const availableW = Math.max(220, viewportW - paddingX * 2);
+    const availableH = Math.max(220, viewportH - paddingTop - paddingBottom);
 
     const scaleX = availableW / treeW;
     const scaleY = availableH / treeH;
 
-    // Determine target zoom, capped between 0.45 and 1.0
-    const targetZoom = Math.min(1.0, Math.max(0.45, Math.min(scaleX, scaleY)));
-
-    // Calculate center pan so the tree is centered horizontally and vertically
+    const targetZoom = Math.min(1.05, Math.max(0.4, Math.min(scaleX, scaleY)));
     const centeredPanX = (viewportW - treeW * targetZoom) / 2 - minX * targetZoom;
-    const centeredPanY = paddingTop + Math.max(0, (availableH - treeH * targetZoom) / 3) - minY * targetZoom;
+    const centeredPanY =
+      paddingTop + Math.max(0, (availableH - treeH * targetZoom) / 2) - minY * targetZoom;
 
     setZoom(targetZoom);
-    setPan({
-      x: centeredPanX,
-      y: centeredPanY
-    });
+    setPan({ x: centeredPanX, y: centeredPanY });
   }, [treeBounds]);
 
-  // Auto center on initial mount and when layout or view mode changes
+  // Center smoothly on the currently selected person
+  const centerOnSelectedPerson = useCallback(() => {
+    if (!containerRef.current || !selectedPersonId) return;
+    const pos = activeLayout[selectedPersonId];
+    if (!pos) return;
+    const viewportW = containerRef.current.clientWidth || window.innerWidth;
+    const viewportH = containerRef.current.clientHeight || window.innerHeight - 64;
+    const targetZoom = Math.max(zoom, 0.95);
+    setZoom(targetZoom);
+    setPan({
+      x: viewportW / 2 - (pos.x + CARD_W / 2) * targetZoom,
+      y: viewportH / 2 - (pos.y + CARD_H / 2) * targetZoom,
+    });
+  }, [activeLayout, selectedPersonId, zoom]);
+
+  // Auto fit on initial mount, tree structural change, or view mode switch
+  const personCount = Object.keys(tree.persons).length;
   useEffect(() => {
     const timer = setTimeout(() => {
       fitToScreen();
     }, 40);
     return () => clearTimeout(timer);
-  }, [viewMode, fitToScreen]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewMode, personCount]);
 
-  // Auto center on window resize
   useEffect(() => {
-    const handleResize = () => {
-      fitToScreen();
-    };
+    const handleResize = () => fitToScreen();
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, [fitToScreen]);
@@ -349,7 +278,7 @@ export const FamilyTreeCanvas: React.FC<FamilyTreeCanvasProps> = ({
     const set = new Set<string>();
     Object.values(tree.persons).forEach(p => {
       const fullName = `${p.firstName} ${p.lastName} ${p.maidenName || ''}`.toLowerCase();
-      const place = (p.birthPlace || '' + p.deathPlace || '').toLowerCase();
+      const place = `${p.birthPlace || ''} ${p.deathPlace || ''}`.toLowerCase();
       const occu = (p.occupation || '').toLowerCase();
       if (fullName.includes(q) || place.includes(q) || occu.includes(q)) {
         set.add(p.id);
@@ -358,29 +287,73 @@ export const FamilyTreeCanvas: React.FC<FamilyTreeCanvasProps> = ({
     return set;
   }, [tree, searchQuery]);
 
+  // MyHeritage-style ghost parent cards above selected person (only when spot is free!)
+  const ghostParentCards = useMemo(() => {
+    if (viewMode !== 'generations' || !selectedPersonId) return [];
+    const person = tree.persons[selectedPersonId];
+    const pos = nodesLayout[selectedPersonId];
+    if (!person || !pos) return [];
+
+    const missingFather = !person.fatherId;
+    const missingMother = !person.motherId;
+    if (!missingFather && !missingMother) return [];
+
+    const ghostY = pos.y - ROW_STEP_Y;
+    const ghosts: { type: 'father' | 'mother'; x: number; y: number; label: string }[] = [];
+
+    const isAreaFree = (gx: number, gy: number) =>
+      !Object.values(nodesLayout).some(
+        existing =>
+          Math.abs(existing.y - gy) < CARD_H + 10 &&
+          gx < existing.x + CARD_W + 14 &&
+          gx + CARD_W + 14 > existing.x
+      );
+
+    if (missingFather && missingMother) {
+      const fx = pos.x + CARD_W / 2 - SPOUSE_GAP / 2 - CARD_W;
+      const mx = pos.x + CARD_W / 2 + SPOUSE_GAP / 2;
+      if (isAreaFree(fx, ghostY)) ghosts.push({ type: 'father', x: fx, y: ghostY, label: 'Přidat otce' });
+      if (isAreaFree(mx, ghostY)) ghosts.push({ type: 'mother', x: mx, y: ghostY, label: 'Přidat matku' });
+    } else if (missingFather) {
+      const fx = pos.x - (CARD_W + SPOUSE_GAP) / 2;
+      if (isAreaFree(fx, ghostY)) ghosts.push({ type: 'father', x: fx, y: ghostY, label: 'Přidat otce' });
+    } else if (missingMother) {
+      const mx = pos.x + (CARD_W + SPOUSE_GAP) / 2;
+      if (isAreaFree(mx, ghostY)) ghosts.push({ type: 'mother', x: mx, y: ghostY, label: 'Přidat matku' });
+    }
+
+    return ghosts;
+  }, [viewMode, selectedPersonId, tree.persons, nodesLayout]);
+
   return (
-    <div className="relative w-full h-full overflow-hidden bg-[#f4f0e6] select-none">
+    <div
+      className="relative w-full h-full overflow-hidden bg-[#f3f5f8] select-none"
+      style={{
+        backgroundImage: 'radial-gradient(#cbd5e1 1px, transparent 1px)',
+        backgroundSize: '24px 24px',
+      }}
+    >
       {/* Top Controls Bar */}
       <div className="absolute top-4 left-4 right-4 z-20 flex flex-wrap items-center justify-between gap-3 pointer-events-none">
         {/* Left: View Mode Switcher */}
-        <div className="pointer-events-auto flex items-center bg-white/95 backdrop-blur-md shadow-sm border border-stone-200/80 rounded-xl p-1 gap-1">
+        <div className="pointer-events-auto flex items-center bg-white/95 backdrop-blur-md shadow-sm border border-slate-200/90 rounded-xl p-1 gap-1">
           <button
             onClick={() => onViewModeChange('generations')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-all ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-all ${
               viewMode === 'generations'
-                ? 'bg-amber-800 text-white shadow-sm'
-                : 'text-stone-600 hover:text-stone-900 hover:bg-stone-100'
+                ? 'bg-slate-900 text-white shadow-sm'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
             }`}
           >
             <Layers className="w-3.5 h-3.5" />
-            <span>Generační strom</span>
+            <span>Rodinný strom</span>
           </button>
           <button
             onClick={() => onViewModeChange('pedigree')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-all ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-all ${
               viewMode === 'pedigree'
-                ? 'bg-amber-800 text-white shadow-sm'
-                : 'text-stone-600 hover:text-stone-900 hover:bg-stone-100'
+                ? 'bg-slate-900 text-white shadow-sm'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
             }`}
           >
             <Compass className="w-3.5 h-3.5" />
@@ -388,10 +361,10 @@ export const FamilyTreeCanvas: React.FC<FamilyTreeCanvasProps> = ({
           </button>
           <button
             onClick={() => onViewModeChange('fan')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-all ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-all ${
               viewMode === 'fan'
-                ? 'bg-amber-800 text-white shadow-sm'
-                : 'text-stone-600 hover:text-stone-900 hover:bg-stone-100'
+                ? 'bg-slate-900 text-white shadow-sm'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
             }`}
           >
             <CircleDot className="w-3.5 h-3.5" />
@@ -399,10 +372,10 @@ export const FamilyTreeCanvas: React.FC<FamilyTreeCanvasProps> = ({
           </button>
           <button
             onClick={() => onViewModeChange('timeline')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-all ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-all ${
               viewMode === 'timeline'
-                ? 'bg-amber-800 text-white shadow-sm'
-                : 'text-stone-600 hover:text-stone-900 hover:bg-stone-100'
+                ? 'bg-slate-900 text-white shadow-sm'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
             }`}
           >
             <Calendar className="w-3.5 h-3.5" />
@@ -410,28 +383,27 @@ export const FamilyTreeCanvas: React.FC<FamilyTreeCanvasProps> = ({
           </button>
         </div>
 
-        {/* Search bar & Stats */}
+        {/* Search bar & Parish CTA */}
         <div className="pointer-events-auto flex items-center gap-2">
           <div className="relative">
-            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-stone-400" />
+            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
               type="text"
-              placeholder="Hledat osobu, obec, povolání..."
+              placeholder="Hledat osobu, obec..."
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
-              className="pl-9 pr-4 py-1.5 bg-white/95 backdrop-blur-md text-xs border border-stone-200/80 rounded-xl shadow-sm text-stone-800 placeholder-stone-400 focus:outline-none focus:ring-2 focus:ring-amber-700/30 w-56 transition-all"
+              className="pl-9 pr-10 py-1.5 bg-white/95 backdrop-blur-md text-xs border border-slate-200/90 rounded-xl shadow-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-600/30 w-52 sm:w-60 transition-all"
             />
             {searchQuery && (
-              <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded-full font-semibold">
+              <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[11px] text-amber-700 font-semibold tabular-nums">
                 {matchingPersonIds.size}
               </span>
             )}
           </div>
 
-          {/* Parish Assistant Quick Trigger */}
           <button
             onClick={() => onOpenParishAssistant()}
-            className="px-3.5 py-1.5 bg-gradient-to-r from-emerald-700 to-teal-800 hover:from-emerald-800 hover:to-teal-900 text-white text-xs font-semibold rounded-xl shadow-sm flex items-center gap-1.5 transition-all"
+            className="px-3.5 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-semibold rounded-xl shadow-sm flex items-center gap-1.5 whitespace-nowrap shrink-0 transition-all"
           >
             <BookOpen className="w-3.5 h-3.5 text-emerald-200" />
             <span>Hledat v matrikách &amp; AI</span>
@@ -440,48 +412,64 @@ export const FamilyTreeCanvas: React.FC<FamilyTreeCanvasProps> = ({
       </div>
 
       {/* Floating Canvas Controls (Bottom Right) */}
-      <div className="absolute bottom-6 right-6 z-20 flex flex-col gap-1.5 bg-white/95 backdrop-blur-md border border-stone-200/90 shadow-md rounded-xl p-1.5">
-        <button
-          onClick={handleZoomIn}
-          title="Přiblížit (+)"
-          className="p-2 text-stone-700 hover:text-stone-950 hover:bg-stone-100 rounded-lg transition-colors"
-        >
-          <ZoomIn className="w-4 h-4" />
-        </button>
-        <button
-          onClick={handleZoomOut}
-          title="Oddálit (-)"
-          className="p-2 text-stone-700 hover:text-stone-950 hover:bg-stone-100 rounded-lg transition-colors"
-        >
-          <ZoomOut className="w-4 h-4" />
-        </button>
-        <div className="h-px bg-stone-200 my-0.5" />
-        <button
-          onClick={fitToScreen}
-          title="Vycentrovat a přizpůsobit rodokmen obrazovce"
-          className="p-2 text-stone-700 hover:text-stone-950 hover:bg-stone-100 rounded-lg transition-colors"
-        >
-          <Maximize2 className="w-4 h-4" />
-        </button>
-      </div>
+      {viewMode !== 'timeline' && viewMode !== 'fan' && (
+        <div className="absolute bottom-5 right-5 z-20 flex flex-col gap-1 bg-white/95 backdrop-blur-md border border-slate-200/90 shadow-md rounded-xl p-1.5">
+          <button
+            onClick={handleZoomIn}
+            title="Přiblížit"
+            className="p-2 text-slate-700 hover:text-slate-950 hover:bg-slate-100 rounded-lg transition-colors"
+          >
+            <ZoomIn className="w-4 h-4" />
+          </button>
+          <div className="text-[10px] text-center font-medium text-slate-500 tabular-nums py-0.5">
+            {Math.round(zoom * 100)}%
+          </div>
+          <button
+            onClick={handleZoomOut}
+            title="Oddálit"
+            className="p-2 text-slate-700 hover:text-slate-950 hover:bg-slate-100 rounded-lg transition-colors"
+          >
+            <ZoomOut className="w-4 h-4" />
+          </button>
+          <div className="h-px bg-slate-200 my-0.5" />
+          <button
+            onClick={centerOnSelectedPerson}
+            title="Vycentrovat na vybranou osobu"
+            className="p-2 text-slate-700 hover:text-slate-950 hover:bg-slate-100 rounded-lg transition-colors"
+          >
+            <Crosshair className="w-4 h-4" />
+          </button>
+          <button
+            onClick={fitToScreen}
+            title="Zobrazit celý rodokmen na obrazovce"
+            className="p-2 text-slate-700 hover:text-slate-950 hover:bg-slate-100 rounded-lg transition-colors"
+          >
+            <Maximize2 className="w-4 h-4" />
+          </button>
+        </div>
+      )}
 
-      {/* Legend / Status indicator */}
-      <div className="absolute bottom-6 left-6 z-20 bg-white/90 backdrop-blur-md border border-stone-200 shadow-sm rounded-xl px-3.5 py-2 flex items-center gap-4 text-xs text-stone-600">
+      {/* Clean Unboxed Legend (Bottom Left) */}
+      <div className="hidden sm:flex absolute bottom-5 left-5 z-20 bg-white/95 backdrop-blur-md border border-slate-200/90 shadow-sm rounded-xl px-3.5 py-2 items-center gap-4 text-xs text-slate-600">
         <div className="flex items-center gap-1.5">
-          <span className="w-2.5 h-2.5 rounded-full bg-blue-500 inline-block" />
+          <span className="w-3 h-3 rounded-sm bg-[#e3effb] border border-[#7eb3e6] inline-block" />
           <span>Muž</span>
         </div>
         <div className="flex items-center gap-1.5">
-          <span className="w-2.5 h-2.5 rounded-full bg-rose-400 inline-block" />
+          <span className="w-3 h-3 rounded-sm bg-[#fce9ef] border border-[#e39bb2] inline-block" />
           <span>Žena</span>
         </div>
-        <div className="flex items-center gap-1.5">
-          <span className="w-2.5 h-2.5 rounded-full bg-emerald-600 inline-block" />
-          <span className="font-medium text-emerald-800">Doloženo v matrice</span>
+        <div className="flex items-center gap-1.5 text-slate-600">
+          <span className="text-amber-700 font-bold">⚭</span>
+          <span>Manželství</span>
         </div>
-        <div className="h-3 w-px bg-stone-200" />
-        <span className="text-stone-400">
-          Celkem: <strong className="text-stone-800">{Object.keys(tree.persons).length}</strong> osob
+        <div className="flex items-center gap-1.5 text-emerald-800">
+          <BookOpen className="w-3.5 h-3.5 text-emerald-700" />
+          <span>Doloženo v matrice</span>
+        </div>
+        <span className="text-slate-300" aria-hidden="true">|</span>
+        <span className="text-slate-500 tabular-nums">
+          Celkem <strong className="text-slate-900">{personCount}</strong> osob
         </span>
       </div>
 
@@ -491,16 +479,15 @@ export const FamilyTreeCanvas: React.FC<FamilyTreeCanvasProps> = ({
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseUp}
         onWheel={handleWheel}
-        className="w-full h-full cursor-grab active:cursor-grabbing"
+        className={`w-full h-full ${viewMode === 'timeline' ? '' : 'cursor-grab active:cursor-grabbing'}`}
       >
         {viewMode === 'fan' ? (
           <FanChartView
             tree={tree}
             selectedPersonId={selectedPersonId || tree.rootPersonId}
             onSelectPerson={onSelectPerson}
-            zoom={zoom}
-            pan={pan}
           />
         ) : viewMode === 'timeline' ? (
           <TimelineView
@@ -513,198 +500,295 @@ export const FamilyTreeCanvas: React.FC<FamilyTreeCanvasProps> = ({
             style={{
               transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
               transformOrigin: '0 0',
-              transition: isDragging ? 'none' : 'transform 0.08s ease-out',
+              transition: isDragging ? 'none' : 'transform 0.1s ease-out',
             }}
             className="relative w-0 h-0"
           >
-            {/* SVG Relationship Connector Lines */}
+            {/* Orthogonal SVG Connectors */}
             <svg
               className="absolute pointer-events-none overflow-visible"
               style={{ left: 0, top: 0, width: '1px', height: '1px' }}
             >
-              <defs>
-                <linearGradient id="parentChildGrad" x1="0%" y1="0%" x2="0%" y2="100%">
-                  <stop offset="0%" stopColor="#8d7b68" stopOpacity="0.7" />
-                  <stop offset="100%" stopColor="#5c4d3c" stopOpacity="0.9" />
-                </linearGradient>
-              </defs>
+              {viewMode === 'generations' ? (
+                <>
+                  {/* 1. Orthogonal Family Bus Rails (Parent Couple -> Sibling Rail -> Child Cards) */}
+                  {busGroups.map(group => {
+                    const childPositions = group.childIds
+                      .map(id => ({ id, pos: nodesLayout[id] }))
+                      .filter(item => Boolean(item.pos));
+                    if (childPositions.length === 0) return null;
 
-              {/* Render parent-child paths */}
-              {Object.values(tree.persons).map(p => {
-                const childPos = (viewMode === 'pedigree' ? pedigreeLayout : nodesLayout)[p.id];
-                if (!childPos) return null;
+                    const childCentersX = childPositions.map(c => c.pos.x + CARD_W / 2);
+                    const minChildX = Math.min(...childCentersX);
+                    const maxChildX = Math.max(...childCentersX);
+                    const railLeft = Math.min(group.stemX, minChildX);
+                    const railRight = Math.max(group.stemX, maxChildX);
 
-                const lines: React.ReactNode[] = [];
-
-                // Line to father
-                if (p.fatherId) {
-                  const fatherPos = (viewMode === 'pedigree' ? pedigreeLayout : nodesLayout)[p.fatherId];
-                  if (fatherPos) {
-                    const startX = fatherPos.x + 135;
-                    const startY = fatherPos.y + 110;
-                    const endX = childPos.x + 135;
-                    const endY = childPos.y;
-                    const midY = (startY + endY) / 2;
-
-                    lines.push(
-                      <path
-                        key={`line-${p.fatherId}-${p.id}`}
-                        d={`M ${startX} ${startY} C ${startX} ${midY}, ${endX} ${midY}, ${endX} ${endY}`}
-                        fill="none"
-                        stroke="#9ca3af"
-                        strokeWidth="2"
-                        strokeDasharray={p.parishCitations.length > 0 ? undefined : '4 3'}
-                        className="opacity-70 hover:opacity-100 transition-opacity"
-                      />
+                    const isParentSelected = Boolean(
+                      selectedPersonId && group.parentIds.includes(selectedPersonId)
                     );
-                  }
-                }
-
-                // Line to mother
-                if (p.motherId) {
-                  const motherPos = (viewMode === 'pedigree' ? pedigreeLayout : nodesLayout)[p.motherId];
-                  if (motherPos) {
-                    const startX = motherPos.x + 135;
-                    const startY = motherPos.y + 110;
-                    const endX = childPos.x + 135;
-                    const endY = childPos.y;
-                    const midY = (startY + endY) / 2;
-
-                    lines.push(
-                      <path
-                        key={`line-${p.motherId}-${p.id}`}
-                        d={`M ${startX} ${startY} C ${startX} ${midY}, ${endX} ${midY}, ${endX} ${endY}`}
-                        fill="none"
-                        stroke="#9ca3af"
-                        strokeWidth="2"
-                        strokeDasharray={p.parishCitations.length > 0 ? undefined : '4 3'}
-                        className="opacity-70 hover:opacity-100 transition-opacity"
-                      />
+                    const isChildSelected = Boolean(
+                      selectedPersonId && group.childIds.includes(selectedPersonId)
                     );
-                  }
-                }
+                    const isGroupHighlighted = isParentSelected || isChildSelected;
+                    const baseStroke = isGroupHighlighted ? '#d97706' : '#94a3b8';
+                    const baseWidth = isGroupHighlighted ? 2.2 : 1.75;
 
-                // Spouse connection (render once per pair using canonical ID order)
-                (p.spouseIds || []).forEach(spId => {
-                  if (p.id >= spId) return;
-                  const spousePos = (viewMode === 'pedigree' ? pedigreeLayout : nodesLayout)[spId];
-                  if (!spousePos) return;
-
-                  if (viewMode === 'pedigree' && spousePos.x === childPos.x) {
-                    const topPos = childPos.y < spousePos.y ? childPos : spousePos;
-                    const botPos = childPos.y < spousePos.y ? spousePos : childPos;
-                    const bracketX = topPos.x - 16;
-                    const sY = topPos.y + 60;
-                    const eY = botPos.y + 60;
-                    const midY = (sY + eY) / 2;
-
-                    lines.push(
-                      <g key={`spouse-${p.id}-${spId}`}>
-                        <path
-                          d={`M ${topPos.x} ${sY} L ${bracketX} ${sY} L ${bracketX} ${eY} L ${botPos.x} ${eY}`}
-                          fill="none"
-                          stroke="#b45309"
-                          strokeWidth="2.5"
-                          strokeDasharray="4 3"
-                          className="opacity-85"
-                        />
-                        <circle cx={bracketX} cy={midY} r="10" fill="#fef3c7" stroke="#b45309" strokeWidth="1.5" />
-                        <text
-                          x={bracketX}
-                          y={midY + 3.5}
-                          textAnchor="middle"
-                          fontSize="11"
-                          fontWeight="bold"
-                          fill="#92400e"
-                        >
-                          ⚭
-                        </text>
-                      </g>
-                    );
-                    return;
-                  }
-
-                  const leftPos = childPos.x <= spousePos.x ? childPos : spousePos;
-                  const rightPos = childPos.x <= spousePos.x ? spousePos : childPos;
-                  const isSameRow = Math.abs(leftPos.y - rightPos.y) < 5;
-                  const gapX = rightPos.x - (leftPos.x + 270);
-
-                  if (isSameRow && gapX >= -10 && gapX <= 75) {
-                    const sX = leftPos.x + 270;
-                    const sY = leftPos.y + 52;
-                    const eX = rightPos.x;
-                    const eY = rightPos.y + 52;
-                    const midX = (sX + eX) / 2;
-                    lines.push(
-                      <g key={`spouse-${p.id}-${spId}`}>
+                    return (
+                      <g key={group.key}>
+                        {/* Vertical stem from marriage bridge (or single parent) down to sibling rail */}
                         <line
-                          x1={sX}
-                          y1={sY}
-                          x2={eX}
-                          y2={eY}
-                          stroke="#b45309"
-                          strokeWidth="2.5"
-                          strokeDasharray="4 3"
-                          className="opacity-85"
+                          x1={group.stemX}
+                          y1={group.stemY}
+                          x2={group.stemX}
+                          y2={group.busY}
+                          stroke={baseStroke}
+                          strokeWidth={baseWidth}
+                          strokeLinecap="round"
                         />
-                        <circle cx={midX} cy={sY} r="10" fill="#fef3c7" stroke="#b45309" strokeWidth="1.5" />
-                        <text
-                          x={midX}
-                          y={sY + 3.5}
-                          textAnchor="middle"
-                          fontSize="11"
-                          fontWeight="bold"
-                          fill="#92400e"
-                        >
-                          ⚭
-                        </text>
-                      </g>
-                    );
-                  } else {
-                    const sX = leftPos.x + 135;
-                    const sY = leftPos.y;
-                    const eX = rightPos.x + 135;
-                    const eY = rightPos.y;
-                    const archY = Math.min(sY, eY) - 28;
-                    const midX = (sX + eX) / 2;
-                    lines.push(
-                      <g key={`spouse-${p.id}-${spId}`}>
-                        <path
-                          d={`M ${sX} ${sY} C ${sX} ${archY}, ${eX} ${archY}, ${eX} ${eY}`}
-                          fill="none"
-                          stroke="#b45309"
-                          strokeWidth="2.5"
-                          strokeDasharray="4 3"
-                          className="opacity-85"
-                        />
-                        <circle cx={midX} cy={archY + 7} r="10" fill="#fef3c7" stroke="#b45309" strokeWidth="1.5" />
-                        <text
-                          x={midX}
-                          y={archY + 10.5}
-                          textAnchor="middle"
-                          fontSize="11"
-                          fontWeight="bold"
-                          fill="#92400e"
-                        >
-                          ⚭
-                        </text>
-                      </g>
-                    );
-                  }
-                });
 
-                return lines;
-              })}
+                        {/* Horizontal sibling bus rail */}
+                        {railRight - railLeft > 1 && (
+                          <line
+                            x1={railLeft}
+                            y1={group.busY}
+                            x2={railRight}
+                            y2={group.busY}
+                            stroke={baseStroke}
+                            strokeWidth={baseWidth}
+                            strokeLinecap="round"
+                          />
+                        )}
+
+                        {/* Vertical drops into each child card */}
+                        {childPositions.map(({ id, pos }) => {
+                          const cx = pos.x + CARD_W / 2;
+                          const highlightDrop =
+                            isParentSelected || selectedPersonId === id;
+                          return (
+                            <line
+                              key={`drop-${group.key}-${id}`}
+                              x1={cx}
+                              y1={group.busY}
+                              x2={cx}
+                              y2={pos.y}
+                              stroke={highlightDrop ? '#d97706' : baseStroke}
+                              strokeWidth={highlightDrop ? 2.2 : baseWidth}
+                              strokeLinecap="round"
+                            />
+                          );
+                        })}
+                      </g>
+                    );
+                  })}
+
+                  {/* 2. Spouse Marriage Bridges */}
+                  {spouseBridges.map(bridge => {
+                    const isHighlighted =
+                      selectedPersonId === bridge.leftId || selectedPersonId === bridge.rightId;
+                    const strokeColor = isHighlighted ? '#d97706' : '#94a3b8';
+
+                    if (bridge.isAdjacentSameRow) {
+                      const sX = bridge.leftPos.x + CARD_W;
+                      const eX = bridge.rightPos.x;
+                      const y = bridge.leftPos.y + CARD_H / 2;
+                      const midX = (sX + eX) / 2;
+
+                      return (
+                        <g key={bridge.key}>
+                          <line
+                            x1={sX}
+                            y1={y}
+                            x2={eX}
+                            y2={y}
+                            stroke={strokeColor}
+                            strokeWidth={isHighlighted ? 2.4 : 2}
+                          />
+                          <circle
+                            cx={midX}
+                            cy={y}
+                            r="9"
+                            fill="#ffffff"
+                            stroke={isHighlighted ? '#d97706' : '#cbd5e1'}
+                            strokeWidth="1.5"
+                          />
+                          <text
+                            x={midX}
+                            y={y + 3.5}
+                            textAnchor="middle"
+                            fontSize="10"
+                            fontWeight="bold"
+                            fill={isHighlighted ? '#b45309' : '#64748b'}
+                          >
+                            ⚭
+                          </text>
+                        </g>
+                      );
+                    }
+
+                    // Non-adjacent spouse arch cleanly above row
+                    const sX = bridge.leftPos.x + CARD_W / 2;
+                    const sY = bridge.leftPos.y;
+                    const eX = bridge.rightPos.x + CARD_W / 2;
+                    const eY = bridge.rightPos.y;
+                    const archY = Math.min(sY, eY) - 24;
+                    const midX = (sX + eX) / 2;
+
+                    return (
+                      <g key={bridge.key}>
+                        <path
+                          d={`M ${sX} ${sY} L ${sX} ${archY} L ${eX} ${archY} L ${eX} ${eY}`}
+                          fill="none"
+                          stroke={strokeColor}
+                          strokeWidth="1.75"
+                          strokeDasharray="4 3"
+                        />
+                        <circle
+                          cx={midX}
+                          cy={archY}
+                          r="9"
+                          fill="#ffffff"
+                          stroke="#cbd5e1"
+                          strokeWidth="1.5"
+                        />
+                        <text
+                          x={midX}
+                          y={archY + 3.5}
+                          textAnchor="middle"
+                          fontSize="10"
+                          fontWeight="bold"
+                          fill="#64748b"
+                        >
+                          ⚭
+                        </text>
+                      </g>
+                    );
+                  })}
+
+                  {/* 3. Ghost Parent Dashed Connectors for Selected Card */}
+                  {selectedPersonId && nodesLayout[selectedPersonId] && ghostParentCards.length > 0 && (
+                    <g>
+                      {ghostParentCards.map(ghost => {
+                        const selPos = nodesLayout[selectedPersonId];
+                        const startX = ghost.x + CARD_W / 2;
+                        const startY = ghost.y + CARD_H;
+                        const endX = selPos.x + CARD_W / 2;
+                        const endY = selPos.y;
+                        const midY = (startY + endY) / 2;
+                        return (
+                          <path
+                            key={`ghost-line-${ghost.type}`}
+                            d={`M ${startX} ${startY} L ${startX} ${midY} L ${endX} ${midY} L ${endX} ${endY}`}
+                            fill="none"
+                            stroke="#94a3b8"
+                            strokeWidth="1.5"
+                            strokeDasharray="4 4"
+                          />
+                        );
+                      })}
+                    </g>
+                  )}
+                </>
+              ) : (
+                /* Pedigree View Orthogonal Brackets */
+                Object.values(tree.persons).map(p => {
+                  const childPos = pedigreeLayout[p.id];
+                  if (!childPos) return null;
+
+                  const lines: React.ReactNode[] = [];
+                  const fPos = p.fatherId ? pedigreeLayout[p.fatherId] : undefined;
+                  const mPos = p.motherId ? pedigreeLayout[p.motherId] : undefined;
+
+                  if (fPos || mPos) {
+                    const startX = childPos.x + CARD_W;
+                    const startY = childPos.y + CARD_H / 2;
+                    const midX = startX + 38;
+
+                    if (fPos) {
+                      const fY = fPos.y + CARD_H / 2;
+                      lines.push(
+                        <path
+                          key={`ped-f-${p.id}`}
+                          d={`M ${startX} ${startY} L ${midX} ${startY} L ${midX} ${fY} L ${fPos.x} ${fY}`}
+                          fill="none"
+                          stroke="#94a3b8"
+                          strokeWidth="1.75"
+                        />
+                      );
+                    }
+                    if (mPos) {
+                      const mY = mPos.y + CARD_H / 2;
+                      lines.push(
+                        <path
+                          key={`ped-m-${p.id}`}
+                          d={`M ${startX} ${startY} L ${midX} ${startY} L ${midX} ${mY} L ${mPos.x} ${mY}`}
+                          fill="none"
+                          stroke="#94a3b8"
+                          strokeWidth="1.75"
+                        />
+                      );
+                    }
+                    if (fPos && mPos) {
+                      const fY = fPos.y + CARD_H / 2;
+                      const mY = mPos.y + CARD_H / 2;
+                      const badgeY = (fY + mY) / 2;
+                      lines.push(
+                        <g key={`ped-mar-${p.id}`}>
+                          <circle cx={midX} cy={badgeY} r="9" fill="#ffffff" stroke="#cbd5e1" strokeWidth="1.5" />
+                          <text x={midX} y={badgeY + 3.5} textAnchor="middle" fontSize="10" fill="#b45309" fontWeight="bold">
+                            ⚭
+                          </text>
+                        </g>
+                      );
+                    }
+                  }
+
+                  return lines;
+                })
+              )}
             </svg>
 
-            {/* Person Cards */}
+            {/* Ghost Add-Parent Cards (MyHeritage Style) */}
+            {ghostParentCards.map(ghost => (
+              <button
+                key={`ghost-${ghost.type}`}
+                type="button"
+                onClick={() => selectedPersonId && onAddRelative(ghost.type, selectedPersonId)}
+                style={{
+                  position: 'absolute',
+                  left: `${ghost.x}px`,
+                  top: `${ghost.y}px`,
+                  width: `${CARD_W}px`,
+                  height: `${CARD_H}px`,
+                }}
+                className={`ghost-node-card rounded-xl border-2 border-dashed flex flex-col items-center justify-center gap-1.5 text-xs font-semibold transition-all hover:scale-[1.02] shadow-xs ${
+                  ghost.type === 'father'
+                    ? 'border-sky-300 bg-sky-50/75 text-sky-800 hover:bg-sky-100/90 hover:border-sky-500'
+                    : 'border-rose-300 bg-rose-50/75 text-rose-800 hover:bg-rose-100/90 hover:border-rose-500'
+                }`}
+              >
+                <div
+                  className={`w-7 h-7 rounded-full flex items-center justify-center ${
+                    ghost.type === 'father' ? 'bg-sky-200/80 text-sky-900' : 'bg-rose-200/80 text-rose-900'
+                  }`}
+                >
+                  <Plus className="w-4 h-4" />
+                </div>
+                <span>{ghost.label}</span>
+              </button>
+            ))}
+
+            {/* Person Cards (MyHeritage Clean Rectangular Cards) */}
             {Object.values(tree.persons).map(person => {
-              const pos = (viewMode === 'pedigree' ? pedigreeLayout : nodesLayout)[person.id];
+              const pos = activeLayout[person.id];
               if (!pos) return null;
 
               const isSelected = selectedPersonId === person.id;
               const isMatch = matchingPersonIds.has(person.id);
               const hasCitations = person.parishCitations && person.parishCitations.length > 0;
+              const isFemale = person.gender === 'F';
+              const showAvatarImg = Boolean(person.avatarUrl && !brokenAvatarIds[person.id]);
+              const shortPlace = formatShortPlace(person.birthPlace || person.deathPlace || person.residence);
 
               return (
                 <div
@@ -713,210 +797,186 @@ export const FamilyTreeCanvas: React.FC<FamilyTreeCanvasProps> = ({
                     position: 'absolute',
                     left: `${pos.x}px`,
                     top: `${pos.y}px`,
-                    width: '270px',
+                    width: `${CARD_W}px`,
+                    height: `${CARD_H}px`,
                   }}
-                  className={`person-node-card group rounded-xl transition-all duration-200 select-none ${
-                    isSelected
-                      ? 'ring-4 ring-amber-600/70 shadow-2xl scale-[1.03] z-30'
-                      : 'hover:shadow-xl hover:scale-[1.01] shadow-md z-10'
-                  } ${
-                    isMatch ? 'ring-2 ring-emerald-500 shadow-emerald-200' : ''
+                  className={`person-node-card group rounded-xl transition-all duration-150 select-none ${
+                    isSelected ? 'z-30' : 'z-10 hover:z-20'
                   }`}
                 >
-                  <div className={`p-3.5 rounded-xl border bg-white relative overflow-hidden ${
-                    person.gender === 'F' ? 'border-rose-200/80' : 'border-blue-200/80'
-                  }`}>
-                    {/* Top color accent strip */}
-                    <div
-                      className={`absolute top-0 left-0 right-0 h-1.5 ${
-                        person.gender === 'F' ? 'bg-rose-400' : 'bg-sky-600'
-                      }`}
-                    />
-
-                    {/* Parish Archive Verified Badge */}
+                  {/* Card Body */}
+                  <div
+                    onClick={() => onSelectPerson(person.id)}
+                    className={`w-full h-full px-3 py-2.5 rounded-xl border cursor-pointer flex items-center gap-2.5 relative transition-all ${
+                      isSelected
+                        ? 'bg-white border-amber-500 ring-2 ring-amber-500/35 shadow-lg'
+                        : isMatch
+                          ? 'bg-emerald-50/90 border-emerald-500 ring-2 ring-emerald-400/40 shadow-md'
+                          : isFemale
+                            ? 'bg-[#fdf2f5] border-[#edc3d0] hover:border-[#d57191] hover:shadow-md shadow-xs'
+                            : 'bg-[#eef6fc] border-[#bad6f0] hover:border-[#5594d4] hover:shadow-md shadow-xs'
+                    }`}
+                  >
+                    {/* Subtle Archive Book Verification Icon (no boxy pill) */}
                     {hasCitations && (
-                      <div
-                        title={`Doloženo v matrice: ${person.parishCitations.length} záznam(ů)`}
-                        className="absolute top-2.5 right-2.5 flex items-center gap-1 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-md text-[10px] font-semibold text-emerald-800"
+                      <span
+                        title={`Doloženo v matrice (${person.parishCitations.length} záznam/y)`}
+                        className="absolute top-2 right-2 text-emerald-700"
                       >
-                        <BookOpen className="w-3 h-3 text-emerald-600" />
-                        <span>Matrika</span>
-                      </div>
+                        <BookOpen className="w-3.5 h-3.5" />
+                      </span>
                     )}
 
-                    {/* Header info */}
-                    <div 
-                      onClick={() => onSelectPerson(person.id)}
-                      className="cursor-pointer"
+                    {/* Circular Portrait / Silhouette */}
+                    <div
+                      className={`w-12 h-12 rounded-full overflow-hidden shrink-0 flex items-center justify-center border ${
+                        isFemale
+                          ? 'bg-[#f8dbe4] border-[#e7b2c3] text-[#a94468]'
+                          : 'bg-[#d8eafa] border-[#a9cceb] text-[#2b689e]'
+                      }`}
                     >
-                      <div className="flex items-center gap-2.5 mt-1">
-                        {/* Avatar / Portrait or silhouette */}
-                        <div className={`w-11 h-11 rounded-lg overflow-hidden shrink-0 flex items-center justify-center font-bold text-sm shadow-inner ${
-                          person.gender === 'F' ? 'bg-rose-100 text-rose-800' : 'bg-sky-100 text-sky-800'
-                        }`}>
-                          {person.avatarUrl ? (
-                            <img
-                              src={person.avatarUrl}
-                              alt={person.firstName}
-                              className="w-full h-full object-cover"
-                            />
-                          ) : (
-                            <User className="w-6 h-6 opacity-75" />
-                          )}
-                        </div>
-
-                        {/* Name */}
-                        <div className="min-w-0 flex-1">
-                          <h4 className="font-serif-title font-bold text-sm text-stone-900 truncate">
-                            {person.firstName} {person.lastName}
-                          </h4>
-                          {person.maidenName && (
-                            <p className="text-[11px] text-stone-500 truncate italic">
-                              roz. {person.maidenName}
-                            </p>
-                          )}
-                          {person.occupation && (
-                            <p className="text-[11px] text-amber-900 font-medium truncate flex items-center gap-1">
-                              <Briefcase className="w-2.5 h-2.5 opacity-70" />
-                              {person.occupation}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Vital Dates & Places */}
-                      <div className="mt-2.5 pt-2 border-t border-stone-100 text-[11px] space-y-1 text-stone-600">
-                        {/* Birth */}
-                        <div className="flex items-center justify-between">
-                          <span className="text-stone-400 font-medium">★ Narození:</span>
-                          <span className="font-medium text-stone-800 truncate ml-1">
-                            {person.birthDate || 'neznámé'}
-                          </span>
-                        </div>
-                        {person.birthPlace && (
-                          <div className="text-[10px] text-stone-500 truncate flex items-center gap-1">
-                            <MapPin className="w-2.5 h-2.5 opacity-60 text-stone-400" />
-                            <span>{person.birthPlace}</span>
-                          </div>
-                        )}
-
-                        {/* Death */}
-                        {(person.isDeceased || person.deathDate || person.deathPlace) && (
-                          <>
-                            <div className="flex items-center justify-between pt-0.5">
-                              <span className="text-stone-400 font-medium">† Úmrtí:</span>
-                              <span className="font-medium text-stone-800 truncate ml-1">
-                                {person.deathDate || 'zemřel(a)'}
-                              </span>
-                            </div>
-                            {person.deathPlace && (
-                              <div className="text-[10px] text-stone-500 truncate flex items-center gap-1">
-                                <MapPin className="w-2.5 h-2.5 opacity-60 text-stone-400" />
-                                <span>{person.deathPlace}</span>
-                              </div>
-                            )}
-                          </>
-                        )}
-
-                        {/* Spouse summary */}
-                        {person.spouseIds && person.spouseIds.length > 0 && (
-                          <div className="flex items-center justify-between pt-0.5 text-[10px]">
-                            <span className="text-amber-700 font-semibold shrink-0">⚭ Manžel/ka:</span>
-                            <span className="font-medium text-amber-950 truncate ml-1">
-                              {person.spouseIds
-                                .map(id => tree.persons[id])
-                                .filter(Boolean)
-                                .map(sp => `${sp.firstName} ${sp.lastName}`)
-                                .join(', ')}
-                            </span>
-                          </div>
-                        )}
-                      </div>
+                      {showAvatarImg ? (
+                        <img
+                          src={person.avatarUrl}
+                          alt={`${person.firstName} ${person.lastName}`}
+                          referrerPolicy="no-referrer"
+                          onError={() =>
+                            setBrokenAvatarIds(prev => ({ ...prev, [person.id]: true }))
+                          }
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <User className="w-6 h-6" />
+                      )}
                     </div>
 
-                    {/* Quick Add Relations Toolbar on Hover */}
-                    <div className="mt-2.5 pt-1.5 border-t border-dashed border-stone-200 flex items-center justify-between gap-1 text-[10px] text-stone-500">
-                      <div className="flex items-center gap-1">
-                        {!person.fatherId && (
-                          <button
-                            onClick={() => onAddRelative('father', person.id)}
-                            title="Přidat otce"
-                            className="px-1.5 py-0.5 bg-stone-100 hover:bg-sky-100 hover:text-sky-800 rounded font-medium transition-colors"
-                          >
-                            + Otec
-                          </button>
-                        )}
-                        {!person.motherId && (
-                          <button
-                            onClick={() => onAddRelative('mother', person.id)}
-                            title="Přidat matku"
-                            className="px-1.5 py-0.5 bg-stone-100 hover:bg-rose-100 hover:text-rose-800 rounded font-medium transition-colors"
-                          >
-                            + Matka
-                          </button>
-                        )}
-                        <button
-                          onClick={() => onAddRelative('spouse', person.id)}
-                          title="Přidat manžela/ku"
-                          className="px-1.5 py-0.5 bg-stone-100 hover:bg-amber-100 hover:text-amber-800 rounded font-medium transition-colors"
-                        >
-                          + Manžel
-                        </button>
-                        <button
-                          onClick={() => onAddRelative('child', person.id)}
-                          title="Přidat potomka"
-                          className="px-1.5 py-0.5 bg-stone-100 hover:bg-emerald-100 hover:text-emerald-800 rounded font-medium transition-colors"
-                        >
-                          + Dítě
-                        </button>
-                      </div>
-
-                      <div className="flex items-center gap-1">
-                        <button
-                          onClick={() => onOpenParishAssistant(person)}
-                          title="Vyhledat v matrikách pro tuto osobu"
-                          className="p-1 text-emerald-700 hover:bg-emerald-50 rounded transition-colors"
-                        >
-                          <Sparkles className="w-3.5 h-3.5" />
-                        </button>
-
-                        {confirmingDeleteId === person.id ? (
-                          <div className="flex items-center gap-1 bg-rose-50 border border-rose-200 px-1.5 py-0.5 rounded text-[9px]">
-                            <span className="text-rose-700 font-semibold">Smazat?</span>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onDeletePerson(person.id);
-                                setConfirmingDeleteId(null);
-                              }}
-                              className="px-1 py-0.2 bg-rose-600 text-white rounded font-bold hover:bg-rose-700"
-                            >
-                              Ano
-                            </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setConfirmingDeleteId(null);
-                              }}
-                              className="px-1 py-0.2 bg-stone-200 text-stone-700 rounded hover:bg-stone-300"
-                            >
-                              Ne
-                            </button>
-                          </div>
-                        ) : (
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setConfirmingDeleteId(person.id);
-                            }}
-                            title="Smazat osobu"
-                            className="p-1 text-stone-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        )}
-                      </div>
+                    {/* Clean 3-line Identity & Dates */}
+                    <div className="min-w-0 flex-1 pr-3">
+                      <h4 className="font-sans font-bold text-[13px] leading-snug text-slate-900 truncate">
+                        {person.firstName} {person.lastName}
+                      </h4>
+                      {person.maidenName && (
+                        <p className="text-[11px] leading-tight text-slate-500 truncate">
+                          roz. {person.maidenName}
+                        </p>
+                      )}
+                      <p className="text-[11.5px] font-medium text-slate-700 tabular-nums mt-0.5 truncate">
+                        {formatLifespan(person)}
+                      </p>
+                      {shortPlace && (
+                        <p className="text-[10.5px] text-slate-500 truncate">
+                          {shortPlace}
+                        </p>
+                      )}
                     </div>
+                  </div>
+
+                  {/* Floating Quick-Action Bar (Only visible on hover or selected card!) */}
+                  <div
+                    className={`absolute left-1/2 -translate-x-1/2 -bottom-8 z-40 flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-900/95 text-white shadow-lg border border-slate-700 text-[10px] whitespace-nowrap transition-opacity duration-150 ${
+                      isSelected
+                        ? 'opacity-100 pointer-events-auto'
+                        : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto'
+                    }`}
+                  >
+                    {!person.fatherId && (
+                      <button
+                        type="button"
+                        onClick={e => {
+                          e.stopPropagation();
+                          onAddRelative('father', person.id);
+                        }}
+                        title="Přidat nebo propojit otce"
+                        className="px-1.5 py-0.5 hover:bg-sky-700/80 rounded font-medium transition-colors"
+                      >
+                        + Otec
+                      </button>
+                    )}
+                    {!person.motherId && (
+                      <button
+                        type="button"
+                        onClick={e => {
+                          e.stopPropagation();
+                          onAddRelative('mother', person.id);
+                        }}
+                        title="Přidat nebo propojit matku"
+                        className="px-1.5 py-0.5 hover:bg-rose-700/80 rounded font-medium transition-colors"
+                      >
+                        + Matka
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={e => {
+                        e.stopPropagation();
+                        onAddRelative('spouse', person.id);
+                      }}
+                      title="Přidat nebo propojit manžela/ku"
+                      className="px-1.5 py-0.5 hover:bg-amber-700/80 rounded font-medium transition-colors"
+                    >
+                      + Manžel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={e => {
+                        e.stopPropagation();
+                        onAddRelative('child', person.id);
+                      }}
+                      title="Přidat nebo propojit dítě"
+                      className="px-1.5 py-0.5 hover:bg-emerald-700/80 rounded font-medium transition-colors"
+                    >
+                      + Dítě
+                    </button>
+                    <span className="text-slate-600">|</span>
+                    <button
+                      type="button"
+                      onClick={e => {
+                        e.stopPropagation();
+                        onOpenParishAssistant(person);
+                      }}
+                      title="Vyhledat v matrikách pro tuto osobu"
+                      className="p-0.5 text-emerald-300 hover:text-white hover:bg-emerald-700/60 rounded transition-colors"
+                    >
+                      <Sparkles className="w-3 h-3" />
+                    </button>
+
+                    {confirmingDeleteId === person.id ? (
+                      <div className="flex items-center gap-1 pl-1">
+                        <button
+                          type="button"
+                          onClick={e => {
+                            e.stopPropagation();
+                            onDeletePerson(person.id);
+                            setConfirmingDeleteId(null);
+                          }}
+                          className="px-1.5 py-0.5 bg-rose-600 text-white rounded font-bold hover:bg-rose-500"
+                        >
+                          Smazat
+                        </button>
+                        <button
+                          type="button"
+                          onClick={e => {
+                            e.stopPropagation();
+                            setConfirmingDeleteId(null);
+                          }}
+                          className="px-1 py-0.5 bg-slate-700 text-slate-200 rounded hover:bg-slate-600"
+                        >
+                          Ne
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={e => {
+                          e.stopPropagation();
+                          setConfirmingDeleteId(person.id);
+                        }}
+                        title="Smazat osobu"
+                        className="p-0.5 text-slate-400 hover:text-rose-300 hover:bg-rose-900/50 rounded transition-colors"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
+                    )}
                   </div>
                 </div>
               );
@@ -935,23 +995,14 @@ function FanChartView({
   tree,
   selectedPersonId,
   onSelectPerson,
-  zoom,
-  pan
 }: {
   tree: FamilyTreeData;
   selectedPersonId: string;
   onSelectPerson: (id: string) => void;
-  zoom: number;
-  pan: { x: number; y: number };
 }) {
   const rootPerson = tree.persons[selectedPersonId] || tree.persons[tree.rootPersonId];
-  if (!rootPerson) return <div className="p-8 text-center text-stone-500">Žádná osoba nevybrána.</div>;
+  if (!rootPerson) return <div className="p-8 text-center text-slate-500">Žádná osoba nevybrána.</div>;
 
-  // Build 4-generation pedigree tree [gen 0, 1, 2, 3]
-  // Gen 0: root (1)
-  // Gen 1: father, mother (2)
-  // Gen 2: ff, fm, mf, mm (4)
-  // Gen 3: fff, ffm, fmf, fmm, mff, mfm, mmf, mmm (8)
   interface FanSlot {
     person?: Person;
     gen: number;
@@ -968,18 +1019,16 @@ function FanChartView({
     if (gen > 3) return;
     const p = pId ? tree.persons[pId] : undefined;
 
-    // Angle span from -160deg to +20deg (180deg semicircle fan) or full circle 360deg
-    const angleRange = 240; // 240 degree elegant fan
+    const angleRange = 240;
     const baseAngle = -120;
     const step = angleRange / total;
     const startAngle = baseAngle + index * step;
     const endAngle = startAngle + step;
 
-    // Quadrant color palette
     let color = '#d97706';
-    if (gen === 0) color = '#78350f';
-    else if (index < total / 2) color = '#1e40af'; // Father line (blue)
-    else color = '#9f1239'; // Mother line (rose)
+    if (gen === 0) color = '#1e293b';
+    else if (index < total / 2) color = '#1d4ed8';
+    else color = '#be123c';
 
     slots.push({
       person: p,
@@ -988,7 +1037,7 @@ function FanChartView({
       totalInGen: total,
       startAngle,
       endAngle,
-      color
+      color,
     });
 
     if (p) {
@@ -1002,16 +1051,22 @@ function FanChartView({
 
   fillGeneration(rootPerson.id, 0, 0, 1);
 
-  // SVG Arc generator
   function polarToCartesian(centerX: number, centerY: number, radius: number, angleInDegrees: number) {
     const angleInRadians = ((angleInDegrees - 90) * Math.PI) / 180.0;
     return {
       x: centerX + radius * Math.cos(angleInRadians),
-      y: centerY + radius * Math.sin(angleInRadians)
+      y: centerY + radius * Math.sin(angleInRadians),
     };
   }
 
-  function describeArc(x: number, y: number, innerRadius: number, outerRadius: number, startAngle: number, endAngle: number) {
+  function describeArc(
+    x: number,
+    y: number,
+    innerRadius: number,
+    outerRadius: number,
+    startAngle: number,
+    endAngle: number
+  ) {
     const startInner = polarToCartesian(x, y, innerRadius, startAngle);
     const endInner = polarToCartesian(x, y, innerRadius, endAngle);
     const startOuter = polarToCartesian(x, y, outerRadius, startAngle);
@@ -1025,7 +1080,7 @@ function FanChartView({
       'A', outerRadius, outerRadius, 0, arcSweep, 1, endOuter.x, endOuter.y,
       'L', endInner.x, endInner.y,
       'A', innerRadius, innerRadius, 0, arcSweep, 0, startInner.x, startInner.y,
-      'Z'
+      'Z',
     ].join(' ');
   }
 
@@ -1033,24 +1088,20 @@ function FanChartView({
   const innerBase = 70;
 
   return (
-    <div className="w-full h-full flex flex-col items-center justify-center p-4">
+    <div className="w-full h-full flex flex-col items-center justify-center p-4 pt-16">
       <div className="text-center mb-2 z-10">
-        <h3 className="font-serif-title font-bold text-lg text-stone-800">
-          Vějířový kruh předků pro: {rootPerson.firstName} {rootPerson.lastName}
+        <h3 className="font-serif-title font-bold text-lg text-slate-900">
+          Vějířový kruh předků: {rootPerson.firstName} {rootPerson.lastName}
         </h3>
-        <p className="text-xs text-stone-500">
-          Zobrazuje 4 generace předků v kruhovém diagramu (modrá = otcova linie, růžová = matčina linie)
+        <p className="text-xs text-slate-500">
+          4 generace předků (modrá = otcova linie, růžová = matčina linie)
         </p>
       </div>
 
       <div className="relative overflow-visible">
-        <svg
-          viewBox="-450 -450 900 900"
-          className="w-[620px] h-[620px] max-w-full drop-shadow-md overflow-visible"
-        >
+        <svg viewBox="-450 -450 900 900" className="w-[600px] h-[600px] max-w-full drop-shadow-md overflow-visible">
           {slots.map((slot, i) => {
             if (slot.gen === 0) {
-              // Center circle for root person
               return (
                 <g
                   key={i}
@@ -1061,7 +1112,7 @@ function FanChartView({
                     cx="0"
                     cy="0"
                     r={innerBase}
-                    fill="#451a03"
+                    fill="#1e293b"
                     className="stroke-2 stroke-white hover:opacity-90 transition-opacity"
                   />
                   <text
@@ -1071,7 +1122,7 @@ function FanChartView({
                     fill="#ffffff"
                     fontSize="13"
                     fontWeight="bold"
-                    className="font-serif-title pointer-events-none"
+                    className="pointer-events-none"
                   >
                     {slot.person?.firstName}
                   </text>
@@ -1082,19 +1133,12 @@ function FanChartView({
                     fill="#ffffff"
                     fontSize="13"
                     fontWeight="bold"
-                    className="font-serif-title pointer-events-none"
+                    className="pointer-events-none"
                   >
                     {slot.person?.lastName}
                   </text>
-                  <text
-                    x="0"
-                    y="25"
-                    textAnchor="middle"
-                    fill="#fde68a"
-                    fontSize="9"
-                    className="pointer-events-none"
-                  >
-                    ★ {slot.person?.birthDate || ''}
+                  <text x="0" y="26" textAnchor="middle" fill="#cbd5e1" fontSize="9" className="pointer-events-none">
+                    {extractYear(slot.person?.birthDate)}
                   </text>
                 </g>
               );
@@ -1116,8 +1160,8 @@ function FanChartView({
               >
                 <path
                   d={d}
-                  fill={slot.person ? slot.color : '#e7e5e4'}
-                  opacity={slot.person ? (slot.gen === 1 ? 0.9 : slot.gen === 2 ? 0.8 : 0.7) : 0.3}
+                  fill={slot.person ? slot.color : '#e2e8f0'}
+                  opacity={slot.person ? (slot.gen === 1 ? 0.92 : slot.gen === 2 ? 0.8 : 0.68) : 0.35}
                   stroke="#ffffff"
                   strokeWidth="1.5"
                   className="hover:opacity-100 hover:brightness-110 transition-all"
@@ -1131,7 +1175,7 @@ function FanChartView({
                     fontSize={slot.gen <= 2 ? '10' : '8'}
                     fontWeight="600"
                     transform={`rotate(${midAngle > 0 && midAngle < 180 ? midAngle - 90 : midAngle + 90}, ${textPos.x}, ${textPos.y})`}
-                    className="pointer-events-none select-none font-serif-title"
+                    className="pointer-events-none select-none"
                   >
                     {slot.person.firstName} {slot.person.lastName}
                   </text>
@@ -1151,13 +1195,12 @@ function FanChartView({
 function TimelineView({
   tree,
   selectedPersonId,
-  onSelectPerson
+  onSelectPerson,
 }: {
   tree: FamilyTreeData;
   selectedPersonId: string | null;
   onSelectPerson: (id: string) => void;
 }) {
-  // Extract all dated events across all persons
   const timelineEvents = useMemo(() => {
     interface EventItem {
       year: number;
@@ -1175,7 +1218,6 @@ function TimelineView({
     Object.values(tree.persons).forEach(p => {
       const name = `${p.firstName} ${p.lastName}`;
 
-      // Parse birth
       if (p.birthDate) {
         const yearMatch = p.birthDate.match(/(\d{4})/);
         if (yearMatch) {
@@ -1187,12 +1229,11 @@ function TimelineView({
             place: p.birthPlace,
             personId: p.id,
             personName: name,
-            details: p.occupation ? `Povolání: ${p.occupation}` : undefined
+            details: p.occupation ? `Povolání: ${p.occupation}` : undefined,
           });
         }
       }
 
-      // Parse death
       if (p.deathDate) {
         const yearMatch = p.deathDate.match(/(\d{4})/);
         if (yearMatch) {
@@ -1203,12 +1244,11 @@ function TimelineView({
             type: 'DEATH',
             place: p.deathPlace,
             personId: p.id,
-            personName: name
+            personName: name,
           });
         }
       }
 
-      // Citations
       p.parishCitations.forEach(cit => {
         const yearMatch = (cit.timeSpan || cit.dateAdded || '').match(/(\d{4})/);
         if (yearMatch) {
@@ -1220,7 +1260,7 @@ function TimelineView({
             place: cit.archiveName,
             personId: p.id,
             personName: name,
-            details: cit.originalText
+            details: cit.originalText,
           });
         }
       });
@@ -1231,60 +1271,58 @@ function TimelineView({
   }, [tree]);
 
   return (
-    <div className="w-full h-full overflow-y-auto p-8 max-w-4xl mx-auto">
+    <div className="w-full h-full overflow-y-auto pt-20 pb-16 px-6 max-w-4xl mx-auto select-text">
       <div className="mb-6">
-        <h3 className="font-serif-title font-bold text-xl text-stone-900">
+        <h3 className="font-serif-title font-bold text-xl text-slate-900">
           Časová osa rodinné historie ({timelineEvents.length} událostí)
         </h3>
-        <p className="text-xs text-stone-500 mt-1">
-          Přehled významných životních milníků, narození, sňatků a archivních zápisů seřazených chronologicky.
+        <p className="text-xs text-slate-500 mt-1">
+          Chronologický přehled narození, úmrtí a archivních záznamů.
         </p>
       </div>
 
-      <div className="relative border-l-2 border-stone-300 ml-4 pl-6 space-y-6">
+      <div className="relative border-l-2 border-slate-300 ml-4 pl-6 space-y-4">
         {timelineEvents.map((evt, idx) => (
           <div
             key={idx}
             onClick={() => onSelectPerson(evt.personId)}
-            className={`relative group cursor-pointer p-4 rounded-xl border bg-white shadow-sm transition-all hover:shadow-md hover:border-amber-400 ${
-              selectedPersonId === evt.personId ? 'ring-2 ring-amber-700 border-amber-500' : 'border-stone-200'
+            className={`relative group cursor-pointer p-4 rounded-xl border bg-white shadow-xs transition-all hover:shadow-md hover:border-amber-400 ${
+              selectedPersonId === evt.personId ? 'ring-2 ring-amber-500 border-amber-500' : 'border-slate-200'
             }`}
           >
-            {/* Timeline bullet icon */}
             <div
               className={`absolute -left-[35px] top-4 w-5 h-5 rounded-full border-2 border-white flex items-center justify-center text-[10px] text-white shadow-sm ${
                 evt.type === 'BIRTH'
                   ? 'bg-sky-600'
                   : evt.type === 'DEATH'
-                  ? 'bg-stone-700'
-                  : 'bg-emerald-600'
+                    ? 'bg-slate-700'
+                    : 'bg-emerald-600'
               }`}
             >
-              {evt.type === 'BIRTH' ? '★' : evt.type === 'DEATH' ? '†' : '📜'}
+              {evt.type === 'BIRTH' ? '★' : evt.type === 'DEATH' ? '†' : '§'}
             </div>
 
             <div className="flex items-center justify-between gap-2">
-              <span className="font-serif-title font-bold text-base text-amber-900">
+              <span className="font-bold text-base text-slate-900 tabular-nums">
                 {evt.year}
               </span>
-              <span className="text-[11px] px-2 py-0.5 rounded-full font-medium bg-stone-100 text-stone-600">
+              <span className="text-xs font-medium text-slate-500 tabular-nums">
                 {evt.dateStr}
               </span>
             </div>
 
-            <h4 className="font-semibold text-stone-900 text-sm mt-1">
+            <h4 className="font-semibold text-slate-900 text-sm mt-1">
               {evt.title}
             </h4>
 
             {evt.place && (
-              <p className="text-xs text-stone-500 flex items-center gap-1 mt-1">
-                <MapPin className="w-3 h-3 text-stone-400" />
-                <span>{evt.place}</span>
+              <p className="text-xs text-slate-500 mt-1">
+                {evt.place}
               </p>
             )}
 
             {evt.details && (
-              <p className="text-xs text-stone-600 mt-2 bg-stone-50 p-2 rounded-lg italic border border-stone-100">
+              <p className="text-xs text-slate-600 mt-2 bg-slate-50 p-2.5 rounded-lg italic border border-slate-100">
                 „{evt.details}“
               </p>
             )}
