@@ -33,6 +33,25 @@ export interface SpouseBridge {
   isAdjacentSameRow: boolean;
 }
 
+export interface BranchToggleInfo {
+  personId: string;
+  coupleKey: string;
+  mode: 'switch' | 'toggle-inlaw';
+  isExpanded: boolean;
+  hiddenCount: number;
+  branchLabel: string;
+}
+
+export interface BranchVisibilityResult {
+  visiblePersonIds: Set<string>;
+  branchToggles: Record<string, BranchToggleInfo>;
+}
+
+export interface LayoutOptions {
+  branchFocusMode?: boolean;
+  expandedSpouseByCouple?: Record<string, string>;
+}
+
 interface Block {
   id: string;
   personIds: string[];
@@ -62,19 +81,440 @@ function getParentKey(p: Person): string {
   return `one:${f || m}`;
 }
 
+export function getCoupleKey(a: string, b: string): string {
+  return a < b ? `${a}|${b}` : `${b}|${a}`;
+}
+
 /**
- * Computes a clean, overlap-free, MyHeritage-style couple-centered hierarchical layout
- * handling ancestors, descendants, siblings, multiple branches, and disconnected subtrees.
+ * Computes which persons are visible under MyHeritage-style per-generation branch focus:
+ * At every married couple in every generation, only ONE spouse's upward branch is shown
+ * by default, while the other spouse gets a clickable branch toggle tab above their card.
  */
-export function computeMyHeritageLayout(tree: FamilyTreeData): {
-  positions: Record<string, NodePosition>;
-  busGroups: FamilyBusGroup[];
-  spouseBridges: SpouseBridge[];
-} {
+export function computeBranchVisibility(
+  tree: FamilyTreeData,
+  expandedSpouseByCouple: Record<string, string> = {},
+  branchFocusMode: boolean = true
+): BranchVisibilityResult {
   const personsMap = tree.persons || {};
   const allIds = Object.keys(personsMap);
   if (allIds.length === 0) {
-    return { positions: {}, busGroups: [], spouseBridges: [] };
+    return { visiblePersonIds: new Set(), branchToggles: {} };
+  }
+
+  if (!branchFocusMode) {
+    return {
+      visiblePersonIds: new Set(allIds),
+      branchToggles: {},
+    };
+  }
+
+  // Symmetric lookup maps for defensive consistency
+  const childrenByParent: Record<string, Set<string>> = {};
+  const spousesByPerson: Record<string, Set<string>> = {};
+  allIds.forEach(id => {
+    childrenByParent[id] = new Set();
+    spousesByPerson[id] = new Set();
+  });
+  allIds.forEach(id => {
+    const p = personsMap[id];
+    if (p.fatherId && personsMap[p.fatherId]) childrenByParent[p.fatherId].add(id);
+    if (p.motherId && personsMap[p.motherId]) childrenByParent[p.motherId].add(id);
+    (p.childrenIds || []).forEach(cId => {
+      if (personsMap[cId]) childrenByParent[id].add(cId);
+    });
+    (p.spouseIds || []).forEach(spId => {
+      if (personsMap[spId] && spId !== id) {
+        spousesByPerson[id].add(spId);
+        spousesByPerson[spId].add(id);
+      }
+    });
+  });
+
+  const hasParents = (id: string) => {
+    const p = personsMap[id];
+    return Boolean(
+      p && ((p.fatherId && personsMap[p.fatherId]) || (p.motherId && personsMap[p.motherId]))
+    );
+  };
+
+  const getSiblings = (id: string): string[] => {
+    const p = personsMap[id];
+    if (!p) return [];
+    const sibs = new Set<string>();
+    if (p.fatherId && childrenByParent[p.fatherId]) {
+      childrenByParent[p.fatherId].forEach(c => {
+        if (c !== id) sibs.add(c);
+      });
+    }
+    if (p.motherId && childrenByParent[p.motherId]) {
+      childrenByParent[p.motherId].forEach(c => {
+        if (c !== id) sibs.add(c);
+      });
+    }
+    return Array.from(sibs);
+  };
+
+  // Helper: simulate expanding a person's upward lineage (honoring existing toggles) to count newly revealed nodes
+  const countUpwardBranch = (startId: string, alreadyVisible: Set<string>): number => {
+    const simAdded = new Set<string>();
+    const simUpwardSeen = new Set<string>();
+
+    const simWalkCouple = (coupleIds: string[]) => {
+      const candidates = coupleIds.filter(id => hasParents(id) && !alreadyVisible.has(id));
+      // Special case: startId itself IS already visible (it's the card holding the button), so allow startId
+      const effectiveCandidates = coupleIds.filter(
+        id => hasParents(id) && (id === startId || !alreadyVisible.has(id))
+      );
+      if (effectiveCandidates.length === 0 && candidates.length === 0) return;
+      const list = effectiveCandidates.length > 0 ? effectiveCandidates : candidates;
+
+      let activeId = list[0];
+      if (list.length >= 2) {
+        const key = getCoupleKey(list[0], list[1]);
+        const explicit = expandedSpouseByCouple[key];
+        if (explicit && list.includes(explicit)) {
+          activeId = explicit;
+        } else {
+          activeId = list.find(id => personsMap[id]?.gender === 'M') || list[0];
+        }
+      }
+
+      if (simUpwardSeen.has(activeId)) return;
+      simUpwardSeen.add(activeId);
+
+      const p = personsMap[activeId];
+      if (!p) return;
+      const nextCouple: string[] = [];
+      if (p.fatherId && personsMap[p.fatherId]) {
+        if (!alreadyVisible.has(p.fatherId)) simAdded.add(p.fatherId);
+        nextCouple.push(p.fatherId);
+      }
+      if (p.motherId && personsMap[p.motherId]) {
+        if (!alreadyVisible.has(p.motherId)) simAdded.add(p.motherId);
+        nextCouple.push(p.motherId);
+      }
+
+      getSiblings(activeId).forEach(sibId => {
+        if (!alreadyVisible.has(sibId)) simAdded.add(sibId);
+        spousesByPerson[sibId]?.forEach(spId => {
+          if (!alreadyVisible.has(spId)) simAdded.add(spId);
+        });
+      });
+
+      if (nextCouple.length > 0) {
+        simWalkCouple(nextCouple);
+      }
+    };
+
+    simWalkCouple([startId]);
+    simAdded.delete(startId);
+    return simAdded.size;
+  };
+
+  const visiblePersonIds = new Set<string>();
+  const branchToggles: Record<string, BranchToggleInfo> = {};
+  const processedGlobal = new Set<string>();
+
+  const seeds = [
+    ...(tree.rootPersonId && personsMap[tree.rootPersonId] ? [tree.rootPersonId] : []),
+    ...allIds,
+  ];
+
+  seeds.forEach(seedId => {
+    if (!personsMap[seedId] || processedGlobal.has(seedId)) return;
+
+    // Collect full connected component first so each disconnected island is handled cleanly once
+    const compQueue = [seedId];
+    const compSet = new Set<string>();
+    while (compQueue.length > 0) {
+      const id = compQueue.shift()!;
+      if (compSet.has(id) || !personsMap[id]) continue;
+      compSet.add(id);
+      processedGlobal.add(id);
+      const p = personsMap[id];
+      if (p.fatherId && personsMap[p.fatherId]) compQueue.push(p.fatherId);
+      if (p.motherId && personsMap[p.motherId]) compQueue.push(p.motherId);
+      spousesByPerson[id]?.forEach(sp => compQueue.push(sp));
+      childrenByParent[id]?.forEach(c => compQueue.push(c));
+    }
+
+    const upwardExpanded = new Set<string>();
+    const spineCoupleMembers = new Set<string>();
+    const downwardSeeds: string[] = [];
+    const deferredSwitches: { otherId: string; coupleKey: string }[] = [];
+    const deferredInLaws: { personId: string; coupleKey: string; isExpanded: boolean }[] = [];
+    const handledInLaw = new Set<string>();
+
+    const walkUpwardCouple = (coupleIds: string[], markAsSpine: boolean) => {
+      coupleIds.forEach(id => {
+        visiblePersonIds.add(id);
+        if (markAsSpine) spineCoupleMembers.add(id);
+      });
+
+      const candidates = coupleIds.filter(id => hasParents(id));
+      if (candidates.length === 0) return;
+
+      let activeId = candidates[0];
+      if (candidates.length >= 2) {
+        const pairKey = getCoupleKey(candidates[0], candidates[1]);
+        const explicit = expandedSpouseByCouple[pairKey];
+        if (explicit && candidates.includes(explicit)) {
+          activeId = explicit;
+        } else if (candidates.includes(seedId)) {
+          activeId = seedId;
+        } else {
+          activeId = candidates.find(id => personsMap[id]?.gender === 'M') || candidates[0];
+        }
+
+        candidates.forEach(otherId => {
+          if (otherId !== activeId) {
+            deferredSwitches.push({ otherId, coupleKey: pairKey });
+          }
+        });
+      }
+
+      if (upwardExpanded.has(activeId)) return;
+      upwardExpanded.add(activeId);
+
+      const p = personsMap[activeId];
+      if (!p) return;
+
+      const nextCouple: string[] = [];
+      if (p.fatherId && personsMap[p.fatherId]) {
+        visiblePersonIds.add(p.fatherId);
+        nextCouple.push(p.fatherId);
+      }
+      if (p.motherId && personsMap[p.motherId]) {
+        visiblePersonIds.add(p.motherId);
+        nextCouple.push(p.motherId);
+      }
+
+      // Include siblings of activeId (and seed them for spouses/descendants)
+      getSiblings(activeId).forEach(sibId => {
+        visiblePersonIds.add(sibId);
+        downwardSeeds.push(sibId);
+      });
+
+      if (nextCouple.length > 0) {
+        walkUpwardCouple(nextCouple, markAsSpine);
+      }
+    };
+
+    // 1. Seed initial couple and climb upward along single active branch per generation
+    const seedSpouses = Array.from(spousesByPerson[seedId] || []);
+    const initialCouple = [seedId, ...seedSpouses];
+    initialCouple.forEach(id => visiblePersonIds.add(id));
+    walkUpwardCouple(initialCouple, true);
+
+    // 2. Walk downward from initial couple & upward-branch siblings (keeping spouses visible, collapsing in-law parents unless toggled)
+    const downwardQueue = [...initialCouple, ...downwardSeeds];
+    const downwardVisited = new Set<string>();
+
+    while (downwardQueue.length > 0) {
+      const currId = downwardQueue.shift()!;
+      if (downwardVisited.has(currId) || !personsMap[currId]) continue;
+      downwardVisited.add(currId);
+      visiblePersonIds.add(currId);
+
+      const currSpouses = Array.from(spousesByPerson[currId] || []);
+      currSpouses.forEach(spId => {
+        visiblePersonIds.add(spId);
+
+        if (
+          !spineCoupleMembers.has(spId) &&
+          !upwardExpanded.has(spId) &&
+          hasParents(spId) &&
+          !handledInLaw.has(spId)
+        ) {
+          handledInLaw.add(spId);
+          const pairKey = getCoupleKey(currId, spId);
+          const isExpanded = expandedSpouseByCouple[pairKey] === spId;
+          if (isExpanded) {
+            walkUpwardCouple([spId], false);
+          }
+          deferredInLaws.push({ personId: spId, coupleKey: pairKey, isExpanded });
+        }
+
+        childrenByParent[spId]?.forEach(cId => {
+          if (!downwardVisited.has(cId)) downwardQueue.push(cId);
+        });
+      });
+
+      childrenByParent[currId]?.forEach(cId => {
+        if (!downwardVisited.has(cId)) downwardQueue.push(cId);
+      });
+    }
+
+    // 3. Finalize branch toggle badges with exact hidden-branch counts
+    deferredSwitches.forEach(({ otherId, coupleKey }) => {
+      const hiddenCount = countUpwardBranch(otherId, visiblePersonIds);
+      if (hiddenCount > 0) {
+        const p = personsMap[otherId];
+        branchToggles[otherId] = {
+          personId: otherId,
+          coupleKey,
+          mode: 'switch',
+          isExpanded: false,
+          hiddenCount,
+          branchLabel: p?.maidenName || p?.lastName || p?.firstName || 'Větev',
+        };
+      }
+    });
+
+    deferredInLaws.forEach(({ personId, coupleKey, isExpanded }) => {
+      const p = personsMap[personId];
+      if (!isExpanded) {
+        const hiddenCount = countUpwardBranch(personId, visiblePersonIds);
+        if (hiddenCount > 0) {
+          branchToggles[personId] = {
+            personId,
+            coupleKey,
+            mode: 'toggle-inlaw',
+            isExpanded: false,
+            hiddenCount,
+            branchLabel: p?.maidenName || p?.lastName || p?.firstName || 'Větev',
+          };
+        }
+      } else {
+        branchToggles[personId] = {
+          personId,
+          coupleKey,
+          mode: 'toggle-inlaw',
+          isExpanded: true,
+          hiddenCount: 0,
+          branchLabel: p?.maidenName || p?.lastName || p?.firstName || 'Větev',
+        };
+      }
+    });
+  });
+
+  return { visiblePersonIds, branchToggles };
+}
+
+/**
+ * Automatically flips collapsed couple branch toggles so `targetPersonId` becomes visible
+ * (e.g. when the user selects someone via Search, Detail Modal, or adds a parent to a collapsed branch).
+ */
+export function resolveTogglesForPerson(
+  tree: FamilyTreeData,
+  targetPersonId: string,
+  currentToggles: Record<string, string>
+): Record<string, string> {
+  const personsMap = tree.persons || {};
+  if (!personsMap[targetPersonId]) return currentToggles;
+
+  const allIds = Object.keys(personsMap);
+  const childrenByParent: Record<string, Set<string>> = {};
+  const spousesByPerson: Record<string, Set<string>> = {};
+  allIds.forEach(id => {
+    childrenByParent[id] = new Set();
+    spousesByPerson[id] = new Set();
+  });
+  allIds.forEach(id => {
+    const p = personsMap[id];
+    if (p.fatherId && personsMap[p.fatherId]) childrenByParent[p.fatherId].add(id);
+    if (p.motherId && personsMap[p.motherId]) childrenByParent[p.motherId].add(id);
+    (p.childrenIds || []).forEach(cId => {
+      if (personsMap[cId]) childrenByParent[id].add(cId);
+    });
+    (p.spouseIds || []).forEach(spId => {
+      if (personsMap[spId] && spId !== id) {
+        spousesByPerson[id].add(spId);
+        spousesByPerson[spId].add(id);
+      }
+    });
+  });
+
+  // Undirected closure behind a collapsed spouse (stops at already-visible nodes)
+  const containsInHiddenClosure = (startId: string, visibleSet: Set<string>): boolean => {
+    const q = [startId];
+    const seen = new Set<string>();
+    while (q.length > 0) {
+      const id = q.shift()!;
+      if (seen.has(id) || !personsMap[id]) continue;
+      if (id !== startId && visibleSet.has(id)) continue;
+      seen.add(id);
+      if (id === targetPersonId) return true;
+      const p = personsMap[id];
+      if (p.fatherId) q.push(p.fatherId);
+      if (p.motherId) q.push(p.motherId);
+      spousesByPerson[id]?.forEach(sp => q.push(sp));
+      childrenByParent[id]?.forEach(c => q.push(c));
+    }
+    return false;
+  };
+
+  let next = { ...currentToggles };
+  for (let depth = 0; depth < 8; depth++) {
+    const { visiblePersonIds, branchToggles } = computeBranchVisibility(tree, next, true);
+    if (visiblePersonIds.has(targetPersonId)) {
+      return next;
+    }
+    const candidate = Object.values(branchToggles).find(
+      t => !t.isExpanded && containsInHiddenClosure(t.personId, visiblePersonIds)
+    );
+    if (!candidate) break;
+    next = { ...next, [candidate.coupleKey]: candidate.personId };
+  }
+
+  return next;
+}
+
+/**
+ * Computes a clean, overlap-free, MyHeritage-style couple-centered hierarchical layout
+ * handling per-generation single-spouse branch focus, ancestors, descendants, siblings, and disconnected subtrees.
+ */
+export function computeMyHeritageLayout(
+  tree: FamilyTreeData,
+  options: LayoutOptions = {}
+): {
+  positions: Record<string, NodePosition>;
+  busGroups: FamilyBusGroup[];
+  spouseBridges: SpouseBridge[];
+  branchToggles: Record<string, BranchToggleInfo>;
+  visiblePersonIds: Set<string>;
+} {
+  const { branchFocusMode = true, expandedSpouseByCouple = {} } = options;
+  const rawPersons = tree.persons || {};
+  if (Object.keys(rawPersons).length === 0) {
+    return {
+      positions: {},
+      busGroups: [],
+      spouseBridges: [],
+      branchToggles: {},
+      visiblePersonIds: new Set(),
+    };
+  }
+
+  const { visiblePersonIds, branchToggles } = computeBranchVisibility(
+    tree,
+    expandedSpouseByCouple,
+    branchFocusMode
+  );
+
+  // Build pruned person map containing strictly currently visible persons
+  const personsMap: Record<string, Person> = {};
+  visiblePersonIds.forEach(id => {
+    const p = rawPersons[id];
+    if (!p) return;
+    personsMap[id] = {
+      ...p,
+      fatherId: p.fatherId && visiblePersonIds.has(p.fatherId) ? p.fatherId : undefined,
+      motherId: p.motherId && visiblePersonIds.has(p.motherId) ? p.motherId : undefined,
+      spouseIds: (p.spouseIds || []).filter(spId => visiblePersonIds.has(spId)),
+      childrenIds: (p.childrenIds || []).filter(cId => visiblePersonIds.has(cId)),
+    };
+  });
+
+  const allIds = Object.keys(personsMap);
+  if (allIds.length === 0) {
+    return {
+      positions: {},
+      busGroups: [],
+      spouseBridges: [],
+      branchToggles,
+      visiblePersonIds,
+    };
   }
 
   // 1. Partition into connected components and assign generation depths via BFS
@@ -548,5 +988,7 @@ export function computeMyHeritageLayout(tree: FamilyTreeData): {
     positions,
     busGroups: Object.values(busMap),
     spouseBridges,
+    branchToggles,
+    visiblePersonIds,
   };
 }

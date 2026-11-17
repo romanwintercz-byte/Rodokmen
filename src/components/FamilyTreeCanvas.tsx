@@ -6,7 +6,9 @@ import {
   SPOUSE_GAP,
   ROW_STEP_Y,
   computeMyHeritageLayout,
+  resolveTogglesForPerson,
   NodePosition,
+  BranchToggleInfo,
 } from '../utils/treeLayout';
 import {
   ZoomIn,
@@ -23,6 +25,9 @@ import {
   Search,
   Trash2,
   Crosshair,
+  ChevronUp,
+  ChevronDown,
+  GitBranch,
 } from 'lucide-react';
 
 interface FamilyTreeCanvasProps {
@@ -75,6 +80,9 @@ export const FamilyTreeCanvas: React.FC<FamilyTreeCanvasProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [confirmingDeleteId, setConfirmingDeleteId] = useState<string | null>(null);
   const [brokenAvatarIds, setBrokenAvatarIds] = useState<Record<string, boolean>>({});
+  const [branchFocusMode, setBranchFocusMode] = useState(true);
+  const [expandedSpouseByCouple, setExpandedSpouseByCouple] = useState<Record<string, string>>({});
+  const [branchSwitchTick, setBranchSwitchTick] = useState(0);
 
   // Zoom handlers (centered on viewport center)
   const handleZoomIn = () => {
@@ -146,11 +154,32 @@ export const FamilyTreeCanvas: React.FC<FamilyTreeCanvasProps> = ({
     });
   };
 
-  // MyHeritage-style couple-centered hierarchical layout
-  const { positions: nodesLayout, busGroups, spouseBridges } = useMemo(
-    () => computeMyHeritageLayout(tree),
-    [tree]
+  // MyHeritage-style couple-centered hierarchical layout (1 active branch per couple in every generation)
+  const {
+    positions: nodesLayout,
+    busGroups,
+    spouseBridges,
+    branchToggles,
+    visiblePersonIds,
+  } = useMemo(
+    () => computeMyHeritageLayout(tree, { branchFocusMode, expandedSpouseByCouple }),
+    [tree, branchFocusMode, expandedSpouseByCouple]
   );
+
+  const handleToggleSpouseBranch = useCallback((toggle: BranchToggleInfo) => {
+    setExpandedSpouseByCouple(prev => {
+      if (toggle.mode === 'toggle-inlaw' && toggle.isExpanded) {
+        const next = { ...prev };
+        delete next[toggle.coupleKey];
+        return next;
+      }
+      return {
+        ...prev,
+        [toggle.coupleKey]: toggle.personId,
+      };
+    });
+    setBranchSwitchTick(t => t + 1);
+  }, []);
 
   // Pedigree Layout (Ahnentafel horizontal brackets, zero vertical overlaps up to 4 generations)
   const pedigreeLayout = useMemo(() => {
@@ -255,15 +284,31 @@ export const FamilyTreeCanvas: React.FC<FamilyTreeCanvasProps> = ({
     });
   }, [activeLayout, selectedPersonId, zoom]);
 
-  // Auto fit on initial mount, tree structural change, or view mode switch
+  // Auto-reveal a collapsed person ONLY when selection changes or a new person is added to the tree
   const personCount = Object.keys(tree.persons).length;
+  const visibleCount = visiblePersonIds.size;
+  const prevSelectCountRef = useRef({ selectedPersonId, personCount });
+
+  useEffect(() => {
+    const prev = prevSelectCountRef.current;
+    const selectionChanged = prev.selectedPersonId !== selectedPersonId;
+    const treeGrew = personCount > prev.personCount;
+    prevSelectCountRef.current = { selectedPersonId, personCount };
+
+    if (!branchFocusMode || !selectedPersonId) return;
+    if ((selectionChanged || treeGrew) && !visiblePersonIds.has(selectedPersonId)) {
+      setExpandedSpouseByCouple(curr => resolveTogglesForPerson(tree, selectedPersonId, curr));
+    }
+  }, [selectedPersonId, personCount, branchFocusMode, visiblePersonIds, tree]);
+
+  // Auto fit on initial mount, tree structural change, branch switch, or view mode switch
   useEffect(() => {
     const timer = setTimeout(() => {
       fitToScreen();
     }, 40);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [viewMode, personCount]);
+  }, [viewMode, personCount, branchFocusMode, visibleCount, branchSwitchTick]);
 
   useEffect(() => {
     const handleResize = () => fitToScreen();
@@ -383,8 +428,28 @@ export const FamilyTreeCanvas: React.FC<FamilyTreeCanvasProps> = ({
           </button>
         </div>
 
-        {/* Search bar & Parish CTA */}
-        <div className="pointer-events-auto flex items-center gap-2">
+        {/* Search bar, Branch Focus Switch & Parish CTA */}
+        <div className="pointer-events-auto flex items-center gap-2 flex-wrap">
+          {viewMode === 'generations' && (
+            <button
+              type="button"
+              onClick={() => setBranchFocusMode(v => !v)}
+              title={
+                branchFocusMode
+                  ? 'V každé generaci je zobrazena větev jednoho z manželů (přepnutí kliknutím na záložku ▲ Větev nad kartou). Kliknutím sem zobrazíte všechny větve najednou.'
+                  : 'Zobrazeny jsou všechny větve současně. Kliknutím sem zapnete přehledné přepínání po jedné větvi na manželský pár.'
+              }
+              className={`px-3 py-1.5 rounded-xl text-xs font-medium flex items-center gap-1.5 whitespace-nowrap shrink-0 border shadow-sm transition-all ${
+                branchFocusMode
+                  ? 'bg-amber-50/95 border-amber-300 text-amber-900 hover:bg-amber-100'
+                  : 'bg-white/95 border-slate-200/90 text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              <GitBranch className="w-3.5 h-3.5 text-amber-700" />
+              <span>{branchFocusMode ? '1 větev na pár' : 'Všechny větve'}</span>
+            </button>
+          )}
+
           <div className="relative">
             <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input
@@ -392,7 +457,16 @@ export const FamilyTreeCanvas: React.FC<FamilyTreeCanvasProps> = ({
               placeholder="Hledat osobu, obec..."
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
-              className="pl-9 pr-10 py-1.5 bg-white/95 backdrop-blur-md text-xs border border-slate-200/90 rounded-xl shadow-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-600/30 w-52 sm:w-60 transition-all"
+              onKeyDown={e => {
+                if (e.key === 'Enter' && matchingPersonIds.size > 0) {
+                  const firstId = Array.from(matchingPersonIds)[0];
+                  if (branchFocusMode && !visiblePersonIds.has(firstId)) {
+                    setExpandedSpouseByCouple(curr => resolveTogglesForPerson(tree, firstId, curr));
+                  }
+                  onSelectPerson(firstId);
+                }
+              }}
+              className="pl-9 pr-10 py-1.5 bg-white/95 backdrop-blur-md text-xs border border-slate-200/90 rounded-xl shadow-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-600/30 w-48 sm:w-56 transition-all"
             />
             {searchQuery && (
               <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[11px] text-amber-700 font-semibold tabular-nums">
@@ -469,7 +543,15 @@ export const FamilyTreeCanvas: React.FC<FamilyTreeCanvasProps> = ({
         </div>
         <span className="text-slate-300" aria-hidden="true">|</span>
         <span className="text-slate-500 tabular-nums">
-          Celkem <strong className="text-slate-900">{personCount}</strong> osob
+          {branchFocusMode && viewMode === 'generations' && visibleCount < personCount ? (
+            <>
+              Zobrazeno <strong className="text-slate-900">{visibleCount}</strong> z {personCount} osob
+            </>
+          ) : (
+            <>
+              Celkem <strong className="text-slate-900">{personCount}</strong> osob
+            </>
+          )}
         </span>
       </div>
 
@@ -804,6 +886,39 @@ export const FamilyTreeCanvas: React.FC<FamilyTreeCanvasProps> = ({
                     isSelected ? 'z-30' : 'z-10 hover:z-20'
                   }`}
                 >
+                  {/* MyHeritage-style Per-Generation Spouse Branch Toggle Tab */}
+                  {viewMode === 'generations' && branchToggles[person.id] && (
+                    <button
+                      type="button"
+                      onClick={e => {
+                        e.stopPropagation();
+                        handleToggleSpouseBranch(branchToggles[person.id]);
+                      }}
+                      title={
+                        branchToggles[person.id].isExpanded
+                          ? `Skrýt rodičovskou větev (${branchToggles[person.id].branchLabel})`
+                          : `Kliknutím zobrazíte větev: ${branchToggles[person.id].branchLabel} (${branchToggles[person.id].hiddenCount} osob)`
+                      }
+                      className={`absolute -top-6 left-1/2 -translate-x-1/2 z-30 h-6 px-2.5 rounded-t-lg border border-b-0 text-[10.5px] font-semibold flex items-center gap-1 whitespace-nowrap shadow-xs transition-all cursor-pointer tabular-nums ${
+                        branchToggles[person.id].isExpanded
+                          ? 'bg-amber-50 border-amber-300 text-amber-900 hover:bg-amber-100'
+                          : 'bg-white border-slate-300 text-slate-700 hover:border-amber-500 hover:bg-amber-50 hover:text-amber-900'
+                      }`}
+                    >
+                      {branchToggles[person.id].isExpanded ? (
+                        <>
+                          <ChevronDown className="w-3 h-3 text-amber-700" />
+                          <span>Skrýt větev</span>
+                        </>
+                      ) : (
+                        <>
+                          <ChevronUp className="w-3 h-3 text-amber-600" />
+                          <span>Větev ({branchToggles[person.id].hiddenCount})</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+
                   {/* Card Body */}
                   <div
                     onClick={() => onSelectPerson(person.id)}
